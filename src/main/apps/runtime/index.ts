@@ -68,6 +68,7 @@ export type {
   AppRuntimeService,
   AppRunResult,
   AppOverviewEntry,
+  AppRunStartInfo,
   AutomationAppState,
   AutomationRun,
   AutomationRunWithSummary,
