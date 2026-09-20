@@ -2,7 +2,7 @@
  * TaskPanel - rail-triggered task panel
  *
  * Surfaces active tasks and unseen completions (PulseList, same
- * usePulseCount() the rail badge reads) from a rail click, visible from
+ * useTaskCount() the rail badge reads) from a rail click, visible from
  * every RAIL_VIEWS page instead of only when a space's sidebar happens to
  * be open.
  *
@@ -10,36 +10,46 @@
  * shell already splits: docked column on desktop (participates in layout,
  * doesn't cover content, per the prototype), bottom sheet when
  * useIsNarrowShell() is true (matching NarrowNavSheet/MobileOverflowMenu —
- * there's no room to dock a 320px column on a narrow layout).
+ * there's no room to dock a 340px column on a narrow layout).
  */
 
-import { X } from 'lucide-react'
+import { X, SquareCheckBig } from 'lucide-react'
 import { PulseList } from '../pulse/PulseList'
-import { usePulseCount } from '../../stores/chat.store'
+import { useTaskItems } from '../../stores/task.store'
 import { useTaskPanelStore } from '../../stores/taskPanel.store'
 import { useIsNarrowShell } from '../../hooks/useIsMobile'
 import { useTranslation } from '../../i18n'
 
 export function TaskPanel() {
   const { t } = useTranslation()
-  const count = usePulseCount()
+  const items = useTaskItems()
   const close = useTaskPanelStore(s => s.close)
   const isNarrow = useIsNarrowShell()
 
+  const continueCount = items.filter(i => i.status === 'waiting' || i.status === 'completed-unseen' || i.status === 'error').length
+  const runningCount = items.filter(i => i.status === 'running').length
+
   const header = (
-    <div className="flex-shrink-0 h-10 px-4 border-b border-border flex items-center justify-between">
+    <div className="flex-shrink-0 px-3 pt-3 pb-2.5 border-b border-border flex items-center justify-between">
       <div className="flex items-center gap-2">
-        <span className="text-sm font-medium">{t('Tasks')}</span>
-        {count > 0 && (
-          <span className="text-xs text-muted-foreground tabular-nums">{count}</span>
+        <SquareCheckBig className="w-[17px] h-[17px]" strokeWidth={1.8} />
+        <span className="text-sm font-semibold">{t('Tasks')}</span>
+        {(continueCount > 0 || runningCount > 0) && (
+          <span className="text-[11px] font-normal text-subtle-foreground tabular-nums">
+            {continueCount > 0 && runningCount > 0
+              ? t('{{continue}} to continue · {{running}} running', { continue: continueCount, running: runningCount })
+              : continueCount > 0
+                ? t('{{continue}} to continue', { continue: continueCount })
+                : t('{{running}} running', { running: runningCount })}
+          </span>
         )}
       </div>
       <button
         onClick={close}
-        className="p-1 hover:bg-secondary rounded-lg transition-colors"
+        className="w-7 h-7 rounded-sm flex items-center justify-center text-subtle-foreground transition-colors hover:bg-secondary hover:text-foreground"
         aria-label={t('Close')}
       >
-        <X className="w-4 h-4 text-muted-foreground" />
+        <X className="w-[15px] h-[15px]" strokeWidth={1.8} />
       </button>
     </div>
   )
@@ -64,7 +74,7 @@ export function TaskPanel() {
   }
 
   return (
-    <div className="w-[320px] h-full flex-shrink-0 bg-card border-r border-border flex flex-col">
+    <div className="w-[340px] h-full flex-shrink-0 bg-card border-r border-border flex flex-col animate-fade-up">
       {header}
       <PulseList />
     </div>

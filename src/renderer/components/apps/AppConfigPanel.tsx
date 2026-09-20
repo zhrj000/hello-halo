@@ -14,13 +14,15 @@
  */
 
 import { useState, useEffect, useCallback, lazy, Suspense } from 'react'
-import { Save, RotateCcw, Unplug, Loader2, FileCode, Settings, Code, AlertTriangle, Globe, Bell, Download, ExternalLink, FolderOpen, Wrench, Send, Trash2, HelpCircle, RefreshCw, X } from 'lucide-react'
+import { Save, RotateCcw, Loader2, FileCode, List, Code, AlertTriangle, Globe, ExternalLink, FolderOpen, Send, HelpCircle, RefreshCw, X, Clock, ChevronRight } from 'lucide-react'
 import { stringify as stringifyYaml, parse as parseYaml } from 'yaml'
 import { useAppsStore } from '../../stores/apps.store'
+import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import type { InputDef, SubscriptionDef, AppSpec } from '../../../shared/apps/spec-types'
 import type { InstalledApp } from '../../../shared/apps/app-types'
 import { resolvePermission } from '../../../shared/apps/app-types'
+import { findMissingRequiredConfig, hasConfigValue } from '../../../shared/apps/config-validation'
 import { resolveSpecI18n } from '../../utils/spec-i18n'
 import { api } from '../../api'
 import { useSpaceStore } from '../../stores/space.store'
@@ -29,6 +31,8 @@ import { AppNotifyChannelsSection } from './AppNotifyChannelsSection'
 import { AppCapabilitiesSection } from './AppCapabilitiesSection'
 import { AppMcpDepsSection } from './AppMcpDepsSection'
 import { AppSkillsSection } from './AppSkillsSection'
+import { AppSettingsNav, type SettingsNavItem } from './AppSettingsNav'
+import { AppBotBindingSection } from './AppBotBindingSection'
 import { AppKnowledgeSection } from './AppKnowledgeSection'
 import { appTypeLabel } from './appTypeUtils'
 import { sanitizeCommandName } from './skill-import-utils'
@@ -83,21 +87,52 @@ interface ConfigFieldProps {
   t: (s: string, opts?: Record<string, unknown>) => string
 }
 
+/** Label + description + required marker, shared by every field type so the
+ * "required but empty" signal has a single implementation. */
+function FieldLabel({ def, id, missing, t }: {
+  def: InputDef
+  id: string
+  missing: boolean
+  t: (s: string, opts?: Record<string, unknown>) => string
+}) {
+  return (
+    <>
+      <label htmlFor={id} className="text-sm text-foreground inline-flex items-center gap-1">
+        {def.label}
+        {def.required && (
+          <span
+            className={missing ? 'text-halo-warning' : 'text-muted-foreground/60'}
+            title={t('Required')}
+          >
+            *
+          </span>
+        )}
+      </label>
+      {def.description && (
+        <p className="text-xs text-muted-foreground">{def.description}</p>
+      )}
+      {missing && (
+        <p className="text-xs text-halo-warning">
+          {t('Required. Leaving it empty does not stop the run — the digital human just acts as if this value were blank.')}
+        </p>
+      )}
+    </>
+  )
+}
+
 function ConfigField({ def, value, onChange, t }: ConfigFieldProps) {
   const id = `config-${def.key}`
 
   // Resolve current value (user-provided > default > empty)
   const currentValue = value ?? def.default ?? ''
+  const missing = !!def.required && !hasConfigValue(value ?? def.default)
 
   switch (def.type) {
     case 'boolean':
       return (
         <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <label htmlFor={id} className="text-sm text-foreground">{def.label}</label>
-            {def.description && (
-              <p className="text-xs text-muted-foreground mt-0.5">{def.description}</p>
-            )}
+          <div className="min-w-0 space-y-0.5">
+            <FieldLabel def={def} id={id} missing={missing} t={t} />
           </div>
           <Switch
             checked={!!currentValue}
@@ -110,10 +145,7 @@ function ConfigField({ def, value, onChange, t }: ConfigFieldProps) {
     case 'select':
       return (
         <div className="space-y-1.5">
-          <label htmlFor={id} className="text-sm text-foreground">{def.label}</label>
-          {def.description && (
-            <p className="text-xs text-muted-foreground">{def.description}</p>
-          )}
+          <FieldLabel def={def} id={id} missing={missing} t={t} />
           <select
             id={id}
             value={String(currentValue)}
@@ -133,10 +165,7 @@ function ConfigField({ def, value, onChange, t }: ConfigFieldProps) {
     case 'number':
       return (
         <div className="space-y-1.5">
-          <label htmlFor={id} className="text-sm text-foreground">{def.label}</label>
-          {def.description && (
-            <p className="text-xs text-muted-foreground">{def.description}</p>
-          )}
+          <FieldLabel def={def} id={id} missing={missing} t={t} />
           <input
             id={id}
             type="number"
@@ -151,10 +180,7 @@ function ConfigField({ def, value, onChange, t }: ConfigFieldProps) {
     case 'text':
       return (
         <div className="space-y-1.5">
-          <label htmlFor={id} className="text-sm text-foreground">{def.label}</label>
-          {def.description && (
-            <p className="text-xs text-muted-foreground">{def.description}</p>
-          )}
+          <FieldLabel def={def} id={id} missing={missing} t={t} />
           <textarea
             id={id}
             value={String(currentValue)}
@@ -170,10 +196,7 @@ function ConfigField({ def, value, onChange, t }: ConfigFieldProps) {
     default:
       return (
         <div className="space-y-1.5">
-          <label htmlFor={id} className="text-sm text-foreground">{def.label}</label>
-          {def.description && (
-            <p className="text-xs text-muted-foreground">{def.description}</p>
-          )}
+          <FieldLabel def={def} id={id} missing={missing} t={t} />
           <input
             id={id}
             type={def.type === 'email' ? 'email' : def.type === 'url' ? 'url' : 'text'}
@@ -327,6 +350,74 @@ function UpgradeSection({ app, appId, t }: UpgradeSectionProps) {
 }
 
 // ============================================
+// Settings Groups: two-level hierarchy — a Group is "what the user is
+// trying to do", a Section within it is the existing uppercase-label block.
+// ============================================
+
+function SettingsGroup({ id, title, description, summary, dirty, hidden, children }: {
+  id?: string
+  title: string
+  description?: string
+  /** Current state of this group, so scrolling the panel reads as a status
+   * report and only a wrong-looking summary needs opening. */
+  summary?: React.ReactNode
+  dirty?: boolean
+  hidden?: boolean
+  children: React.ReactNode
+}) {
+  if (hidden) return null
+  return (
+    <div
+      id={id}
+      className={`scroll-mt-2 bg-card border rounded-xl px-5 py-4 transition-colors ${
+        dirty ? 'border-halo-warning/50' : 'border-border'
+      }`}
+    >
+      <div className="flex items-baseline gap-3 pb-3 border-b border-border/70">
+        <h2 className="text-sm font-semibold text-foreground flex-shrink-0">{title}</h2>
+        {summary && (
+          <span className="ml-auto text-[11px] text-muted-foreground text-right truncate">{summary}</span>
+        )}
+      </div>
+      {description && <p className="text-xs text-muted-foreground mt-3">{description}</p>}
+      <div className="space-y-5 mt-4">{children}</div>
+    </div>
+  )
+}
+
+/** Persisted app-wide (not per-app): once the user has ever expanded Advanced,
+ * it defaults open from then on — a one-way ratchet, not a remembered
+ * open/closed toggle. */
+const ADVANCED_EXPANDED_KEY = 'halo-app-settings-advanced-expanded'
+
+function AdvancedGroup({ id, title, children }: { id?: string; title: string; children: React.ReactNode }) {
+  const [expanded, setExpanded] = useState(() => localStorage.getItem(ADVANCED_EXPANDED_KEY) === 'true')
+
+  const toggle = () => {
+    setExpanded(prev => {
+      const next = !prev
+      if (next) localStorage.setItem(ADVANCED_EXPANDED_KEY, 'true')
+      return next
+    })
+  }
+
+  return (
+    <div id={id} className="scroll-mt-2 bg-card border border-border rounded-xl px-5 py-4">
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={expanded}
+        className="flex items-center gap-1.5 text-left group"
+      >
+        <ChevronRight className={`w-3.5 h-3.5 text-muted-foreground transition-transform ${expanded ? 'rotate-90' : ''}`} />
+        <h2 className="text-sm font-semibold text-foreground group-hover:text-primary transition-colors">{title}</h2>
+      </button>
+      {expanded && <div className="space-y-5 mt-4 pl-5">{children}</div>}
+    </div>
+  )
+}
+
+// ============================================
 // Settings Tab Content
 // ============================================
 
@@ -410,6 +501,9 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart }: SettingsTab
 
   // Config form change detection
   const configHasChanges = hasConfig && JSON.stringify(formValues) !== JSON.stringify(app.userConfig)
+  // Tracks the live form, not the saved config, so the warning clears as the
+  // user types rather than only after a save.
+  const missingRequiredConfig = findMissingRequiredConfig(configSchema, formValues)
 
   async function handleSpecSave() {
     setSpecError(null)
@@ -525,103 +619,382 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart }: SettingsTab
     }
   }
 
+  const scheduleBadge = currentScheduleValue
+    ? (currentScheduleValue.type === 'every' ? currentScheduleValue.every : currentScheduleValue.cron)
+    : undefined
+  const enabledCapabilities = ['ai-browser', 'ai-terminal', 'email', 'im-push'].filter(p => resolvePermission(app, p)).length
+  const modelSummary = app.userOverrides.modelId ?? specRecommendedModel ?? t('Default')
+
+  const [promptExpanded, setPromptExpanded] = useState(false)
+
+  // ── Quick-jump menu state ──
+  const [activeGroupId, setActiveGroupId] = useState<string | null>(null)
+
+  const navItems: SettingsNavItem[] = [
+    { id: 'settings-group-identity', label: t('Identity & Instructions'), dirty: specHasChanges },
+    ...(isAutomation ? [{ id: 'settings-group-trigger', label: t('Trigger'), badge: hasSchedule ? scheduleBadge : undefined }] : []),
+    ...(hasConfig ? [{
+      id: 'settings-group-configuration',
+      label: t('Runtime Parameters'),
+      badge: String(configSchema.length),
+      alert: missingRequiredConfig.length > 0,
+      dirty: configHasChanges,
+    }] : []),
+    { id: 'settings-group-model-capabilities', label: t('Model & Capabilities') },
+    ...(isAutomation || browserLoginEntries.length > 0 ? [{ id: 'settings-group-tools', label: t('Tools & Resources') }] : []),
+    { id: 'settings-group-notifications', label: t('Messages & Notifications') },
+    { id: 'settings-group-advanced', label: t('Advanced') },
+  ]
+
+  const scrollToGroup = useCallback((id: string) => {
+    const el = document.getElementById(id)
+    if (!el) return
+    setActiveGroupId(id)
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [])
+
+  // Keeps the menu in sync while the user scrolls the panel by hand.
+  useEffect(() => {
+    const ids = navItems.map(i => i.id)
+    const observer = new IntersectionObserver(
+      entries => {
+        const visible = entries.find(e => e.isIntersecting)
+        if (visible) setActiveGroupId(visible.target.id)
+      },
+      { rootMargin: '0px 0px -75% 0px', threshold: 0 }
+    )
+    ids.forEach(id => {
+      const el = document.getElementById(id)
+      if (el) observer.observe(el)
+    })
+    return () => observer.disconnect()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [app.id, hasConfig, isAutomation])
+
+  // Overview tab deep-link: scroll to and briefly highlight the settings
+  // group a capability-summary chip summarizes (set by openAppConfigAt).
+  const consumePendingConfigScrollId = useAppsPageStore(s => s.consumePendingConfigScrollId)
+  useEffect(() => {
+    const pendingId = useAppsPageStore.getState().pendingConfigScrollId
+    if (!pendingId) return
+    const el = document.getElementById(pendingId)
+    if (!el) return
+    consumePendingConfigScrollId()
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    el.classList.add('ring-2', 'ring-primary', 'rounded-md')
+    const timer = setTimeout(() => el.classList.remove('ring-2', 'ring-primary', 'rounded-md'), 2000)
+    return () => clearTimeout(timer)
+  }, [consumePendingConfigScrollId])
+
   return (
-    <div className="space-y-6">
-      {/* ════════════════════════════════════════════
-          User Settings (top section)
-          ════════════════════════════════════════════ */}
+    <div className="flex flex-col sm:flex-row items-start gap-4 sm:gap-6">
+      <AppSettingsNav
+        items={navItems}
+        activeId={activeGroupId}
+        onSelect={scrollToGroup}
+      />
 
-      {/* ── Scheduled Execution ── */}
-      {isAutomation && (
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1">
-              {t('Scheduled Execution')}
-              <InfoTip text={t('Automatically wake this digital human to run on a fixed interval. When off, it can still be triggered manually or by an incoming IM message.')} />
-            </h3>
-            <Switch
-              checked={hasSchedule}
-              onCheckedChange={handleScheduleToggle}
-              size="sm"
+      <div className="flex-1 min-w-0 w-full space-y-3">
+      {/* ── Group 1: Identity & Instructions ── */}
+      <SettingsGroup
+        id="settings-group-identity"
+        title={t('Identity & Instructions')}
+        description={t('What this digital human is called and what it does.')}
+        summary={specSystemPrompt ? t('{{count}} chars of instructions', { count: specSystemPrompt.length }) : t('No instructions yet')}
+        dirty={specHasChanges}
+      >
+        <div className="space-y-4">
+          {/* Name */}
+          <div className="space-y-1.5">
+            <label className="text-sm text-foreground">{t('Name')}</label>
+            <input
+              type="text"
+              value={specName}
+              onChange={e => { setSpecName(e.target.value); setSpecSaveSuccess(false); setSpecError(null) }}
+              onBlur={() => { if (specHasChanges) void handleSpecSave() }}
+              className="w-full px-3 py-2 text-sm bg-secondary border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground"
             />
           </div>
-          {hasSchedule && currentScheduleValue ? (
-            <SchedulePicker
-              value={currentScheduleValue}
-              onChange={handleScheduleValueChange}
-            />
-          ) : !hasSchedule && (
-            <p className="text-xs text-muted-foreground">
-              {t('No scheduled trigger. This app can be triggered manually or via IM bot.')}
-            </p>
+
+          {/* Command name — a skill's identifier: directory, frontmatter, slash command */}
+          {isSkill && (
+            <div className="space-y-1.5">
+              <label className="text-sm text-foreground">{t('Command Name')}</label>
+              <div className="flex items-center gap-1.5">
+                <span className="text-sm text-muted-foreground font-mono">/</span>
+                <input
+                  type="text"
+                  value={specCommandName}
+                  onChange={e => { setSpecCommandName(sanitizeCommandName(e.target.value)); setSpecSaveSuccess(false); setSpecError(null) }}
+                  className="flex-1 px-3 py-2 text-sm font-mono bg-secondary border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground"
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {t('Renaming this moves the skill folder and changes how it is invoked.')}
+              </p>
+            </div>
           )}
-        </div>
-      )}
 
-      {/* ── Model ── */}
-      <div className="space-y-3">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          {t('Model')}
-        </h3>
-        <AppModelSelector
-          modelSourceId={app.userOverrides.modelSourceId}
-          modelId={app.userOverrides.modelId}
-          recommendedModel={specRecommendedModel}
-          onChange={async (sourceId, modelId) => {
-            await updateAppOverrides(appId, {
-              modelSourceId: sourceId,
-              modelId: modelId,
-            })
-          }}
-        />
-      </div>
-
-      {/* ── Capabilities / MCP Tools / Skills (automation only) ── */}
-      {isAutomation && (
-        <>
-          <AppCapabilitiesSection app={app} appId={appId} onRequireRestart={onRequireRestart} />
-          <AppMcpDepsSection app={app} appId={appId} onRequireRestart={onRequireRestart} />
-          <AppSkillsSection appId={appId} spaceId={app.spaceId} />
-          <AppKnowledgeSection appId={appId} />
-        </>
-      )}
-
-      {/* ── Required Logins ── */}
-      {browserLoginEntries.length > 0 && (
-        <div className="space-y-2">
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
-            <Globe className="w-3.5 h-3.5" />
-            {t('Required Logins')}
-          </h3>
-          <div className="space-y-1">
-            {browserLoginEntries.map(entry => (
-              <button
-                key={entry.url}
-                onClick={() => {
-                  api.openLoginWindow(entry.url, entry.label)
-                }}
-                className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left rounded-lg bg-secondary/50 border border-border hover:bg-secondary transition-colors group"
-              >
-                <div className="flex items-center gap-2 min-w-0">
-                  <Globe className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
-                  <span className="text-sm text-foreground truncate">{entry.label}</span>
-                </div>
-                <ExternalLink className="w-3.5 h-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
-              </button>
-            ))}
+          {/* Description */}
+          <div className="space-y-1.5">
+            <label className="text-sm text-foreground">{t('Description')}</label>
+            <input
+              type="text"
+              value={specDescription}
+              onChange={e => { setSpecDescription(e.target.value); setSpecSaveSuccess(false); setSpecError(null) }}
+              onBlur={() => { if (specHasChanges) void handleSpecSave() }}
+              className="w-full px-3 py-2 text-sm bg-secondary border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground"
+            />
           </div>
-          <p className="text-xs text-muted-foreground">
-            {t('Click to open the website and log in via the Halo browser.')}
-          </p>
+
+          {/* System Prompt */}
+          <div className="space-y-1.5">
+            <label className="text-sm text-foreground">{t('System Prompt')}</label>
+            {promptExpanded ? (
+              <SystemPromptEditor
+                value={specSystemPrompt}
+                onChange={v => { setSpecSystemPrompt(v); setSpecSaveSuccess(false); setSpecError(null) }}
+                onDone={() => { if (specHasChanges) void handleSpecSave() }}
+                fontMono
+              />
+            ) : (
+              <>
+                <p className="px-3 py-2 text-xs font-mono text-muted-foreground bg-secondary/50 rounded-lg truncate">
+                  {specSystemPrompt || t('No instructions yet')}
+                </p>
+                <button
+                  onClick={() => setPromptExpanded(true)}
+                  className="flex items-center gap-1 text-xs text-primary hover:underline"
+                >
+                  <ChevronRight className="w-3 h-3" />
+                  {t('Edit instructions')}
+                </button>
+              </>
+            )}
+          </div>
+
+          {/* Spec Save / Reset */}
+          {specError && (
+            <p className="text-xs text-red-400">{specError}</p>
+          )}
+          <div className="flex items-center gap-2 pt-1">
+            <button
+              onClick={handleSpecSave}
+              disabled={!specHasChanges || specSaving}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-40"
+            >
+              {specSaving
+                ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                : <Save className="w-3.5 h-3.5" />}
+              {t('Save')}
+            </button>
+            {specHasChanges && (
+              <button
+                onClick={handleSpecReset}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground border border-border rounded-lg transition-colors"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                {t('Reset')}
+              </button>
+            )}
+            {specSaveSuccess && (
+              <span className="text-xs text-green-500">{t('Saved')}</span>
+            )}
+          </div>
         </div>
+      </SettingsGroup>
+
+      {/* ── Group 2: Trigger ── */}
+      {isAutomation && (
+        <SettingsGroup
+          id="settings-group-trigger"
+          title={t('Trigger')}
+          summary={hasSchedule ? scheduleBadge : t('Manual / IM trigger')}
+        >
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1">
+                <Clock className="w-3.5 h-3.5" />
+                {t('Scheduled Execution')}
+                <InfoTip text={t('Automatically wake this digital human to run on a fixed interval. When off, it can still be triggered manually or by an incoming IM message.')} />
+              </h3>
+              <Switch
+                checked={hasSchedule}
+                onCheckedChange={handleScheduleToggle}
+                size="sm"
+              />
+            </div>
+            {hasSchedule && currentScheduleValue ? (
+              <SchedulePicker
+                value={currentScheduleValue}
+                onChange={handleScheduleValueChange}
+              />
+            ) : !hasSchedule && (
+              <p className="text-xs text-muted-foreground">
+                {t('No scheduled trigger. This app can be triggered manually or via IM bot.')}
+              </p>
+            )}
+          </div>
+        </SettingsGroup>
       )}
 
-      {/* ── Notifications (system level + message channels) ── */}
-      <div className="space-y-4">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
-          <Bell className="w-3.5 h-3.5" />
-          {t('Notifications')}
-        </h3>
+      {/* ── Group 3: Runtime Parameters ── */}
+      {hasConfig && (
+        <SettingsGroup
+          id="settings-group-configuration"
+          title={t('Runtime Parameters')}
+          description={t('Values this digital human reads on every run. Empty required ones do not stop it — they just make it work blind.')}
+          summary={missingRequiredConfig.length > 0
+            ? <span className="text-halo-warning">{t('{{count}} required settings are empty', { count: missingRequiredConfig.length })}</span>
+            : t('{{count}} values set', { count: configSchema.length })}
+          dirty={configHasChanges}
+        >
+          <div className="space-y-4">
+            {missingRequiredConfig.length > 0 && (
+              <div
+                role="status"
+                className="flex items-start gap-2 p-3 rounded-lg border border-halo-warning/[0.18] bg-halo-warning/[0.08]"
+              >
+                <AlertTriangle className="w-4 h-4 text-halo-warning flex-shrink-0 mt-0.5" />
+                <div className="min-w-0">
+                  <p className="text-sm text-foreground">
+                    {t('{{count}} required settings are empty', { count: missingRequiredConfig.length })}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {t('This digital human still runs, but it works without these values — results will be off until you fill them in.')}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-4">
+              {configSchema.map(def => (
+                <ConfigField
+                  key={def.key}
+                  def={def}
+                  value={formValues[def.key]}
+                  onChange={handleFieldChange}
+                  t={t}
+                />
+              ))}
+            </div>
+
+            {/* Config Save / Reset */}
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                onClick={handleConfigSave}
+                disabled={!configHasChanges || configSaving}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-40"
+              >
+                {configSaving
+                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  : <Save className="w-3.5 h-3.5" />}
+                {t('Save')}
+              </button>
+              {configHasChanges && (
+                <button
+                  onClick={handleConfigReset}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground border border-border rounded-lg transition-colors"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  {t('Reset')}
+                </button>
+              )}
+              {configSaveSuccess && (
+                <span className="text-xs text-green-500">{t('Saved')}</span>
+              )}
+            </div>
+          </div>
+        </SettingsGroup>
+      )}
+
+      {/* ── Group 4: Model & Capabilities ── */}
+      <SettingsGroup
+        id="settings-group-model-capabilities"
+        title={t('Model & Capabilities')}
+        summary={`${modelSummary} · ${t('{{count}} capabilities on', { count: enabledCapabilities })}`}
+      >
+        <div className="space-y-3">
+          <AppModelSelector
+            modelSourceId={app.userOverrides.modelSourceId}
+            modelId={app.userOverrides.modelId}
+            recommendedModel={specRecommendedModel}
+            onChange={async (sourceId, modelId) => {
+              await updateAppOverrides(appId, {
+                modelSourceId: sourceId,
+                modelId: modelId,
+              })
+            }}
+          />
+        </div>
+
+        {isAutomation && (
+          <AppCapabilitiesSection app={app} appId={appId} onRequireRestart={onRequireRestart} />
+        )}
+      </SettingsGroup>
+
+      {/* ── Group 5: Tools & Resources ──
+          Split out of Model & Capabilities: these are list-shaped attachments
+          with their own health (a MCP can be offline, a login can expire),
+          while the group above is a set of plain on/off grants. */}
+      <SettingsGroup
+        id="settings-group-tools"
+        title={t('Tools & Resources')}
+      >
+        {isAutomation && (
+          <>
+            <AppMcpDepsSection app={app} appId={appId} onRequireRestart={onRequireRestart} />
+            <div className="space-y-2">
+              <AppSkillsSection appId={appId} spaceId={app.spaceId} />
+              <p className="text-xs text-muted-foreground">
+                {t('Skills have no per-digital-human switch: any skill in this workspace is available to every digital human in it. MCP servers are granted one by one, because each one reaches an external system.')}
+              </p>
+            </div>
+            <AppKnowledgeSection appId={appId} />
+          </>
+        )}
+
+        {browserLoginEntries.length > 0 && (
+          <div className="space-y-2">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
+              <Globe className="w-3.5 h-3.5" />
+              {t('Required Logins')}
+            </h3>
+            <div className="space-y-1">
+              {browserLoginEntries.map(entry => (
+                <button
+                  key={entry.url}
+                  onClick={() => {
+                    api.openLoginWindow(entry.url, entry.label)
+                  }}
+                  className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left rounded-lg bg-secondary/50 border border-border hover:bg-secondary transition-colors group"
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Globe className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
+                    <span className="text-sm text-foreground truncate">{entry.label}</span>
+                  </div>
+                  <ExternalLink className="w-3.5 h-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {t('Click to open the website and log in via the Halo browser.')}
+            </p>
+          </div>
+        )}
+      </SettingsGroup>
+
+      {/* ── Group 6: Messages & Notifications ── */}
+      <SettingsGroup
+        id="settings-group-notifications"
+        title={t('Messages & Notifications')}
+        summary={(app.userOverrides.notificationLevel ?? 'important') === 'all' ? t('All')
+          : (app.userOverrides.notificationLevel ?? 'important') === 'none' ? t('None')
+          : t('Important')}
+      >
+        {isAutomation && (
+          <AppBotBindingSection appId={appId} appName={specName} spaceId={app.spaceId} />
+        )}
 
         {/* System notification level */}
         <div className="space-y-2">
@@ -668,153 +1041,13 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart }: SettingsTab
             <p className="text-xs text-muted-foreground">
               {t('Notification channels and contacts available to this digital human')}
             </p>
-            <AppNotifyChannelsSection
-              appId={appId}
-              imPushEnabled={resolvePermission(app, 'im-push')}
-            />
+            <AppNotifyChannelsSection />
           </div>
         )}
-      </div>
+      </SettingsGroup>
 
-      {/* ── User Configuration Fields ── */}
-      {hasConfig && (
-        <div className="space-y-4">
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            {t('Configuration')}
-          </h3>
-          <div className="space-y-4">
-            {configSchema.map(def => (
-              <ConfigField
-                key={def.key}
-                def={def}
-                value={formValues[def.key]}
-                onChange={handleFieldChange}
-                t={t}
-              />
-            ))}
-          </div>
-
-          {/* Config Save / Reset */}
-          <div className="flex items-center gap-2 pt-1">
-            <button
-              onClick={handleConfigSave}
-              disabled={!configHasChanges || configSaving}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-40"
-            >
-              {configSaving
-                ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                : <Save className="w-3.5 h-3.5" />}
-              {t('Save')}
-            </button>
-            {configHasChanges && (
-              <button
-                onClick={handleConfigReset}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground border border-border rounded-lg transition-colors"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                {t('Reset')}
-              </button>
-            )}
-            {configSaveSuccess && (
-              <span className="text-xs text-green-500">{t('Saved')}</span>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* ════════════════════════════════════════════
-          Developer Section (bottom, separated)
-          ════════════════════════════════════════════ */}
-      <div className="border-t border-border pt-6 space-y-6">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
-          <Wrench className="w-3.5 h-3.5" />
-          {t('Developer')}
-        </h3>
-
-        {/* ── App Spec Fields (name, description, system_prompt) ── */}
-        <div className="space-y-4">
-          {/* Name */}
-          <div className="space-y-1.5">
-            <label className="text-sm text-foreground">{t('Name')}</label>
-            <input
-              type="text"
-              value={specName}
-              onChange={e => { setSpecName(e.target.value); setSpecSaveSuccess(false); setSpecError(null) }}
-              className="w-full px-3 py-2 text-sm bg-secondary border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground"
-            />
-          </div>
-
-          {/* Command name — a skill's identifier: directory, frontmatter, slash command */}
-          {isSkill && (
-            <div className="space-y-1.5">
-              <label className="text-sm text-foreground">{t('Command Name')}</label>
-              <div className="flex items-center gap-1.5">
-                <span className="text-sm text-muted-foreground font-mono">/</span>
-                <input
-                  type="text"
-                  value={specCommandName}
-                  onChange={e => { setSpecCommandName(sanitizeCommandName(e.target.value)); setSpecSaveSuccess(false); setSpecError(null) }}
-                  className="flex-1 px-3 py-2 text-sm font-mono bg-secondary border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground"
-                />
-              </div>
-              <p className="text-xs text-muted-foreground">
-                {t('Renaming this moves the skill folder and changes how it is invoked.')}
-              </p>
-            </div>
-          )}
-
-          {/* Description */}
-          <div className="space-y-1.5">
-            <label className="text-sm text-foreground">{t('Description')}</label>
-            <input
-              type="text"
-              value={specDescription}
-              onChange={e => { setSpecDescription(e.target.value); setSpecSaveSuccess(false); setSpecError(null) }}
-              className="w-full px-3 py-2 text-sm bg-secondary border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground"
-            />
-          </div>
-
-          {/* System Prompt */}
-          <div className="space-y-1.5">
-            <label className="text-sm text-foreground">{t('System Prompt')}</label>
-            <SystemPromptEditor
-              value={specSystemPrompt}
-              onChange={v => { setSpecSystemPrompt(v); setSpecSaveSuccess(false); setSpecError(null) }}
-              onDone={() => { if (specHasChanges) void handleSpecSave() }}
-              fontMono
-            />
-          </div>
-
-          {/* Spec Save / Reset */}
-          {specError && (
-            <p className="text-xs text-red-400">{specError}</p>
-          )}
-          <div className="flex items-center gap-2 pt-1">
-            <button
-              onClick={handleSpecSave}
-              disabled={!specHasChanges || specSaving}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-40"
-            >
-              {specSaving
-                ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                : <Save className="w-3.5 h-3.5" />}
-              {t('Save')}
-            </button>
-            {specHasChanges && (
-              <button
-                onClick={handleSpecReset}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground border border-border rounded-lg transition-colors"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                {t('Reset')}
-              </button>
-            )}
-            {specSaveSuccess && (
-              <span className="text-xs text-green-500">{t('Saved')}</span>
-            )}
-          </div>
-        </div>
-
+      {/* ── Group 7: Advanced (collapsed by default) ── */}
+      <AdvancedGroup id="settings-group-advanced" title={t('Advanced')}>
         <UpgradeSection app={app} appId={appId} t={t} />
 
         {/* ── Spec Info (read-only summary + data directory) ── */}
@@ -823,7 +1056,7 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart }: SettingsTab
             <FileCode className="w-3.5 h-3.5" />
             {t('App Spec')}
           </h3>
-          <div className="bg-secondary rounded-lg p-3 text-xs font-mono space-y-1">
+          <div className="bg-secondary/40 rounded-lg p-3 text-xs font-mono space-y-1">
             <div className="flex gap-2">
               <span className="text-muted-foreground w-20 flex-shrink-0">{t('Type')}</span>
               <span className="text-foreground">{t(appTypeLabel(app.spec.type))}</span>
@@ -862,7 +1095,7 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart }: SettingsTab
             <div className="flex gap-2 items-start">
               <span className="text-muted-foreground w-20 flex-shrink-0 pt-px flex items-center gap-1">
                 {t('Memory Files')}
-                <InfoTip text={t('Internal runtime state (memory.md and run history). Separate from workspace files and not affected by space operations.')} />
+                <InfoTip text={t('Internal runtime state (memory.md and run history). Separate from workspace files and not affected by workspace operations.')} />
               </span>
               <div className="min-w-0 flex-1">
                 {dataPath && (
@@ -884,6 +1117,7 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart }: SettingsTab
             </div>
           </div>
         </div>
+      </AdvancedGroup>
       </div>
     </div>
   )
@@ -902,14 +1136,13 @@ interface YamlTabProps {
 }
 
 function YamlTab({ app, appId, t, onRequireRestart }: YamlTabProps) {
-  const { updateAppSpec, exportApp } = useAppsStore()
+  const { updateAppSpec } = useAppsStore()
 
   const [yamlContent, setYamlContent] = useState(() => specToYaml(app.spec))
   const [originalYaml, setOriginalYaml] = useState(() => specToYaml(app.spec))
   const [saving, setSaving] = useState(false)
   const [saveSuccess, setSaveSuccess] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [exporting, setExporting] = useState(false)
 
   // Sync when app spec changes externally (e.g. after Settings tab save)
   useEffect(() => {
@@ -974,12 +1207,6 @@ function YamlTab({ app, appId, t, onRequireRestart }: YamlTabProps) {
     setSaveSuccess(false)
   }
 
-  async function handleExport() {
-    setExporting(true)
-    await exportApp(appId)
-    setExporting(false)
-  }
-
   return (
     <div className="space-y-3 flex flex-col" style={{ minHeight: 0 }}>
       <p className="text-xs text-muted-foreground">
@@ -1029,19 +1256,6 @@ function YamlTab({ app, appId, t, onRequireRestart }: YamlTabProps) {
           <span className="text-xs text-green-500">{t('Saved')}</span>
         )}
 
-        <div className="flex-1" />
-
-        <button
-          onClick={handleExport}
-          disabled={exporting}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground border border-border rounded-lg transition-colors disabled:opacity-40"
-          title={t('Export as YAML file')}
-        >
-          {exporting
-            ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            : <Download className="w-3.5 h-3.5" />}
-          {t('Export')}
-        </button>
       </div>
     </div>
   )
@@ -1059,13 +1273,10 @@ interface AppConfigPanelProps {
 
 export function AppConfigPanel({ appId, spaceName }: AppConfigPanelProps) {
   const { t } = useTranslation()
-  const { apps, uninstallApp, restartAppAgent } = useAppsStore()
+  const { apps, restartAppAgent } = useAppsStore()
   const app = apps.find(a => a.id === appId)
 
   const [activeTab, setActiveTab] = useState<ConfigTab>('settings')
-  const [showUninstallConfirm, setShowUninstallConfirm] = useState(false)
-  const [showClearMemoryConfirm, setShowClearMemoryConfirm] = useState(false)
-  const [clearingMemory, setClearingMemory] = useState(false)
 
   // Config changes auto-apply (the backend rebuilds the chat session on
   // permission/spec/config change). This hint stays as a visible, safe manual
@@ -1073,75 +1284,45 @@ export function AppConfigPanel({ appId, spaceName }: AppConfigPanelProps) {
   // force it. Raised by a session-affecting save, cleared on restart/dismiss.
   const [restartHinted, setRestartHinted] = useState(false)
   const [restarting, setRestarting] = useState(false)
-  // Brief inline success indicator next to the Restart button. Auto-clears
-  // after a few seconds so the user gets explicit confirmation that the
-  // click did something — without it, a fast restart looks like a no-op.
-  const [restartedAt, setRestartedAt] = useState<number | null>(null)
 
-  // Reset hint + ephemeral indicators when switching apps so nothing bleeds
-  // across panels.
+  // Reset the hint when switching apps so nothing bleeds across panels.
   useEffect(() => {
     setRestartHinted(false)
     setRestarting(false)
-    setRestartedAt(null)
   }, [appId])
 
   const handleRestartAgent = useCallback(async () => {
     setRestarting(true)
     try {
       const ok = await restartAppAgent(appId)
-      if (ok) {
-        setRestartHinted(false)
-        setRestartedAt(Date.now())
-      }
+      if (ok) setRestartHinted(false)
     } finally {
       setRestarting(false)
     }
   }, [appId, restartAppAgent])
 
-  // Auto-clear the inline success indicator after ~2.5s.
-  useEffect(() => {
-    if (restartedAt === null) return
-    const timer = setTimeout(() => setRestartedAt(null), 2500)
-    return () => clearTimeout(timer)
-  }, [restartedAt])
-
   if (!app) return null
 
-  const { name, description } = resolveSpecI18n(app.spec, getCurrentLanguage())
-
   return (
-    <div className="flex-1 overflow-y-auto p-6 space-y-4">
-      {/* App identity (always visible) */}
-      <div>
-        <h2 className="text-base font-semibold text-foreground">{name}</h2>
-        <p className="text-sm text-muted-foreground mt-0.5">{description}</p>
-        <div className="flex items-center gap-2 mt-1">
-          <span className="text-xs text-muted-foreground">
-            v{app.spec.version} · {app.spec.author}
-            {spaceName && <span> · {spaceName}</span>}
-          </span>
-        </div>
-      </div>
-
+    <div className="px-4 sm:px-10 py-5 space-y-4">
       {/* Tab switcher */}
-      <div className="flex items-center gap-0.5 bg-secondary rounded-lg p-0.5 w-fit">
+      <div className="flex items-center gap-0.5 bg-secondary rounded-lg p-0.5 w-fit ml-auto">
         <button
           onClick={() => setActiveTab('settings')}
           className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md transition-colors ${
             activeTab === 'settings'
-              ? 'bg-background text-foreground shadow-sm'
+              ? 'bg-card text-foreground shadow-sm'
               : 'text-muted-foreground hover:text-foreground'
           }`}
         >
-          <Settings className="w-3.5 h-3.5" />
-          {t('Settings')}
+          <List className="w-3.5 h-3.5" />
+          {t('Form')}
         </button>
         <button
           onClick={() => setActiveTab('yaml')}
           className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md transition-colors ${
             activeTab === 'yaml'
-              ? 'bg-background text-foreground shadow-sm'
+              ? 'bg-card text-foreground shadow-sm'
               : 'text-muted-foreground hover:text-foreground'
           }`}
         >
@@ -1212,128 +1393,9 @@ export function AppConfigPanel({ appId, spaceName }: AppConfigPanelProps) {
         />
       )}
 
-      {/* Runtime Control: always-visible escape hatch for restarting the
-          agent. Sits outside Danger Zone because restart is non-destructive
-          (no data loss); grouping it with Uninstall would mis-signal risk. */}
-      <div className="space-y-2 pt-2 border-t border-border">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          {t('Runtime Control')}
-        </h3>
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            onClick={handleRestartAgent}
-            disabled={restarting}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-foreground hover:text-primary border border-border hover:border-primary/60 rounded-lg transition-colors disabled:opacity-50"
-          >
-            {restarting
-              ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              : <RefreshCw className="w-3.5 h-3.5" />}
-            {t('Restart {{name}}', { name: 'Agent' })}
-          </button>
-          {restartedAt !== null && (
-            <span className="text-xs text-green-500">{t('Restarted')}</span>
-          )}
-        </div>
-        <p className="text-[11px] text-muted-foreground/60">
-          {t('Reloads the prompt and configuration for this digital human across all chat channels. Conversation history is preserved.')}
-        </p>
-      </div>
-
-      {/* Danger Zone (always visible) */}
-      <div className="space-y-2 pt-2 border-t border-border">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          {t('Danger zone')}
-        </h3>
-
-        {showClearMemoryConfirm ? (
-          <div className="p-3 border border-orange-400/30 rounded-lg space-y-2">
-            <div className="flex items-start gap-2">
-              <AlertTriangle className="w-4 h-4 text-orange-400 flex-shrink-0 mt-0.5" />
-              <p className="text-sm text-muted-foreground">
-                {t('This will permanently delete all memory files (memory.md and run history). The app will start fresh on its next run.')}
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={async () => {
-                  setClearingMemory(true)
-                  try {
-                    const res = await api.appClearMemory(appId)
-                    if (!res.success) {
-                      console.error('[AppConfigPanel] clearAppMemory failed:', res.error)
-                    }
-                  } catch (err) {
-                    console.error('[AppConfigPanel] clearAppMemory error:', err)
-                  } finally {
-                    setClearingMemory(false)
-                    setShowClearMemoryConfirm(false)
-                  }
-                }}
-                disabled={clearingMemory}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-orange-400 hover:text-orange-300 border border-orange-400/30 hover:border-orange-400/60 rounded-lg transition-colors disabled:opacity-50"
-              >
-                {clearingMemory ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
-                {t('Confirm Clear')}
-              </button>
-              <button
-                onClick={() => setShowClearMemoryConfirm(false)}
-                disabled={clearingMemory}
-                className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground rounded-lg transition-colors disabled:opacity-50"
-              >
-                {t('Cancel')}
-              </button>
-            </div>
-          </div>
-        ) : showUninstallConfirm ? (
-          <div className="p-3 border border-red-400/30 rounded-lg space-y-2">
-            <div className="flex items-start gap-2">
-              <AlertTriangle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
-              <p className="text-sm text-muted-foreground">
-                {t('Are you sure you want to uninstall this app? You can reinstall it later.')}
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={async () => {
-                  await uninstallApp(appId)
-                  setShowUninstallConfirm(false)
-                }}
-                className="px-3 py-1.5 text-sm text-red-400 hover:text-red-300 border border-red-400/30 hover:border-red-400/60 rounded-lg transition-colors"
-              >
-                {t('Confirm Uninstall')}
-              </button>
-              <button
-                onClick={() => setShowUninstallConfirm(false)}
-                className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground rounded-lg transition-colors"
-              >
-                {t('Cancel')}
-              </button>
-            </div>
-          </div>
-        ) : (
-          <>
-            <div className="flex flex-wrap gap-2">
-              <button
-                onClick={() => setShowClearMemoryConfirm(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-orange-400 hover:text-orange-300 border border-orange-400/30 hover:border-orange-400/60 rounded-lg transition-colors"
-              >
-                <Trash2 className="w-4 h-4" />
-                {t('Clear Memory')}
-              </button>
-              <button
-                onClick={() => setShowUninstallConfirm(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-red-400 hover:text-red-300 border border-red-400/30 hover:border-red-400/60 rounded-lg transition-colors"
-              >
-                <Unplug className="w-4 h-4" />
-                {t('Uninstall')}
-              </button>
-            </div>
-            <p className="text-[11px] text-muted-foreground/60 mt-1">
-              {t('Memory is the internal runtime state (memory.md and run history). Clearing it does not affect files in the space.')}
-            </p>
-          </>
-        )}
-      </div>
+      <p className="text-xs text-muted-foreground text-center pt-2">
+        v{app.spec.version} · {app.spec.author}
+      </p>
     </div>
   )
 }

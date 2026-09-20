@@ -81,7 +81,7 @@ export function AppKnowledgeSection({ appId }: AppKnowledgeSectionProps) {
                       {kb.spaceIds.length > 0 && (
                         <span className="inline-flex items-center gap-1 text-[9px] leading-none px-1 py-0.5 rounded bg-primary/15 text-primary flex-shrink-0 uppercase tracking-wide">
                           <Globe className="w-2.5 h-2.5" />
-                          {t('Space')}
+                          {t('Workspace')}
                         </span>
                       )}
                       {kb.isDefault && (

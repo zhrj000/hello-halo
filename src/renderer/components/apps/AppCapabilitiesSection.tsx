@@ -119,10 +119,6 @@ export function AppCapabilitiesSection({ app, appId, onRequireRestart }: AppCapa
 
   return (
     <div className="space-y-4">
-      <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        {t('Capabilities')}
-      </h3>
-
       {/* AI Browser */}
       <ToggleRow
         icon={Globe}

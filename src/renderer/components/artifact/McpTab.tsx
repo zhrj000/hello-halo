@@ -20,6 +20,7 @@ import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { resolveSpecI18n } from '../../utils/spec-i18n'
 import type { InstalledApp } from '../../../shared/apps/app-types'
 import { SpaceResourceRow } from './SpaceResourceRow'
+import { AppTypeIcon } from '../store/AppTypeIcon'
 
 export function McpTab() {
   const { t } = useTranslation()
@@ -71,13 +72,14 @@ export function McpTab() {
   }
 
   return (
-    <div className="p-2 space-y-1.5 overflow-y-auto h-full">
+    <div className="py-2 px-1.5 space-y-1.5 overflow-y-auto h-full">
       {mcpApps.map(app => {
         const display = resolveSpecI18n(app.spec, getCurrentLanguage())
         return (
           <SpaceResourceRow
             key={app.id}
-            icon={<Wrench className="w-4 h-4" />}
+            icon={<AppTypeIcon type="mcp" name={display.name} size="xs" />}
+            bareIcon
             name={display.name}
             description={display.description}
             scope={app.spaceId === null ? 'global' : 'space'}

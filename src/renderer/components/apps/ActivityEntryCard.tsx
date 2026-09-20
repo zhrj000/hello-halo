@@ -27,6 +27,10 @@ interface ActivityEntryCardProps {
   isLast?: boolean
   /** Staggered animation delay in seconds (undefined = no animation) */
   animationDelay?: number
+  /** Rendered inside a host card (Overview's summary block): the body skips
+   * its own card, and the drill-in stays muted rather than competing with the
+   * one entry on screen. The feed needs the opposite on both counts. */
+  insideCard?: boolean
 }
 
 // ──────────────────────────────────────────────
@@ -50,13 +54,13 @@ function formatDuration(ms: number): string {
 // Timeline node color per entry type
 // ──────────────────────────────────────────────
 
-function nodeColorClass(type: ActivityEntry['type']): string {
-  switch (type) {
+function nodeColorClass(entry: ActivityEntry): string {
+  switch (entry.type) {
     case 'run_complete': return 'bg-green-500'
     case 'run_skipped':  return 'bg-muted-foreground/40'
     case 'run_error':    return 'bg-red-500'
     case 'milestone':    return 'bg-blue-400'
-    case 'escalation':   return 'bg-orange-400'
+    case 'escalation':   return entry.userResponse ? 'bg-green-500' : 'bg-orange-400'
     case 'output':       return 'bg-purple-400'
     default:             return 'bg-muted-foreground/40'
   }
@@ -66,8 +70,8 @@ function nodeColorClass(type: ActivityEntry['type']): string {
 // Type-specific header elements
 // ──────────────────────────────────────────────
 
-function EntryIcon({ type }: { type: ActivityEntry['type'] }) {
-  switch (type) {
+function EntryIcon({ entry }: { entry: ActivityEntry }) {
+  switch (entry.type) {
     case 'run_complete':
       return <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />
     case 'run_skipped':
@@ -77,7 +81,9 @@ function EntryIcon({ type }: { type: ActivityEntry['type'] }) {
     case 'milestone':
       return <Bell className="w-3.5 h-3.5 text-blue-400" />
     case 'escalation':
-      return <Clock className="w-3.5 h-3.5 text-orange-400" />
+      return entry.userResponse
+        ? <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />
+        : <Clock className="w-3.5 h-3.5 text-orange-400" />
     case 'output':
       return <FileOutput className="w-3.5 h-3.5 text-purple-400" />
     default:
@@ -85,15 +91,15 @@ function EntryIcon({ type }: { type: ActivityEntry['type'] }) {
   }
 }
 
-function entryLabel(type: ActivityEntry['type']): string {
-  switch (type) {
+function entryLabel(entry: ActivityEntry): string {
+  switch (entry.type) {
     case 'run_complete': return 'Completed'
     case 'run_skipped': return 'Skipped'
     case 'run_error': return 'Failed'
     case 'milestone': return 'Milestone'
-    case 'escalation': return 'Waiting for you'
+    case 'escalation': return entry.userResponse ? 'Answered' : 'Waiting for you'
     case 'output': return 'Output'
-    default: return type
+    default: return entry.type
   }
 }
 
@@ -106,12 +112,15 @@ function hasSessionLink(entry: ActivityEntry): boolean {
 // Component
 // ──────────────────────────────────────────────
 
-export function ActivityEntryCard({ entry, appId, isLast, animationDelay }: ActivityEntryCardProps) {
+export function ActivityEntryCard({ entry, appId, isLast, animationDelay, insideCard }: ActivityEntryCardProps) {
   const { t } = useTranslation()
   const openSessionDetail = useAppsPageStore(s => s.openSessionDetail)
   const continueApp = useAppsStore(s => s.continueApp)
   const appState = useAppsStore(s => s.appStates[appId])
   const [isContinuing, setIsContinuing] = useState(false)
+  /** Hovering "View process" lights up the node, timestamp and card together,
+   * so it's unambiguous which entry the drill-in belongs to. */
+  const [drillHover, setDrillHover] = useState(false)
 
   const { content } = entry
   const durationMs = content.durationMs
@@ -121,6 +130,8 @@ export function ActivityEntryCard({ entry, appId, isLast, animationDelay }: Acti
   /** Whether this run_error was due to premature AI termination (no report_to_user call) */
   const isPrematureTermination =
     entry.type === 'run_error' && content.error === 'report_to_user not called'
+
+  const isOpenEscalation = entry.type === 'escalation' && !entry.userResponse
 
   /** Disable Continue while already running/queued or a continue is in-flight */
   const isAppBusy = appState?.status === 'running' || appState?.status === 'queued'
@@ -143,31 +154,41 @@ export function ActivityEntryCard({ entry, appId, isLast, animationDelay }: Acti
 
   return (
     <div
-      className={`relative flex gap-3 ${isLast ? 'pb-2' : 'pb-4'}${animationDelay != null ? ' activity-entry-in' : ''}`}
+      className={`relative flex gap-3 ${isLast ? 'pb-2' : 'pb-6'}${animationDelay != null ? ' activity-entry-in' : ''}`}
       style={animationDelay != null ? { animationDelay: `${animationDelay}s` } : undefined}
     >
       {/* Timeline node */}
-      <div className="relative z-10 flex-shrink-0 mt-1">
+      <div className="relative z-10 flex-shrink-0 h-4 flex items-center">
         <div className="w-[19px] h-[19px] rounded-full flex items-center justify-center bg-background">
-          <div className={`w-2 h-2 rounded-full ${nodeColorClass(entry.type)}`} />
+          <div
+            className={`w-2 h-2 rounded-full transition-all ${nodeColorClass(entry)}
+              ${drillHover ? 'ring-[3px] ring-primary/25' : ''}`}
+          />
         </div>
       </div>
 
       {/* Content */}
       <div className="flex-1 min-w-0">
-        {/* Meta row: timestamp + type indicator + optional "View process" link */}
+        {/* Meta row: caption for the card below it, plus its drill-in */}
         <div className="flex items-center gap-2 mb-1">
-          <span className="font-mono text-[11px] text-muted-foreground/80 tabular-nums">{formatTs(entry.ts)}</span>
-          <EntryIcon type={entry.type} />
-          <span className="text-xs font-medium text-muted-foreground">{t(entryLabel(entry.type))}</span>
+          <span className={`font-mono text-[11px] tabular-nums transition-colors ${drillHover ? 'text-foreground' : 'text-muted-foreground/80'}`}>
+            {formatTs(entry.ts)}
+          </span>
+          <EntryIcon entry={entry} />
+          <span className="text-xs font-medium text-muted-foreground">{t(entryLabel(entry))}</span>
           {durationMs != null && (
             <span className="font-mono text-[11px] text-muted-foreground/60">{formatDuration(durationMs)}</span>
           )}
-          {/* "View process" link — right-aligned */}
           {canViewProcess && (
             <button
               onClick={handleViewProcess}
-              className="ml-auto flex items-center gap-0.5 text-xs text-primary/70 hover:text-primary transition-colors"
+              onMouseEnter={() => setDrillHover(true)}
+              onMouseLeave={() => setDrillHover(false)}
+              className={`ml-auto flex items-center gap-0.5 text-xs transition-colors ${
+                insideCard
+                  ? 'text-muted-foreground hover:text-foreground'
+                  : 'text-primary/70 hover:text-primary'
+              }`}
             >
               {t('View process')}
               <ChevronRight className="w-3 h-3" />
@@ -175,11 +196,19 @@ export function ActivityEntryCard({ entry, appId, isLast, animationDelay }: Acti
           )}
         </div>
 
-        {/* Content */}
-        {entry.type === 'escalation' ? (
-          <EscalationCard entry={entry} appId={appId} />
-        ) : (
-          <div className="space-y-1.5">
+        {/* Content. An unanswered escalation brings its own alert-coloured
+            card, so it's the one body that doesn't get the neutral one; the
+            meta row above stays on the page background either way so it reads
+            as this card's caption. */}
+        <div className={`space-y-1.5${
+          insideCard || isOpenEscalation
+            ? ''
+            : ` bg-card border rounded-lg p-3 transition-colors ${drillHover ? 'border-primary/50' : 'border-border/60'}`
+        }`}>
+          {entry.type === 'escalation' ? (
+            <EscalationCard entry={entry} appId={appId} />
+          ) : (
+            <>
             <MarkdownRenderer content={content.summary} className="text-sm" />
 
             {/* Detailed data: file-sourced (dataPath) or inline */}
@@ -245,8 +274,9 @@ export function ActivityEntryCard({ entry, appId, isLast, animationDelay }: Acti
                 {isContinuing ? t('Continuing…') : t('Continue')}
               </button>
             )}
-          </div>
-        )}
+            </>
+          )}
+        </div>
       </div>
     </div>
   )

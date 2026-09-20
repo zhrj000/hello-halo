@@ -15,16 +15,6 @@ import { useTranslation } from '../i18n'
 
 const isWebMode = api.isRemoteMode()
 
-interface SpaceQuickActionsOptions {
-  /**
-   * Called once the browser tab is open. The old rail footer button used
-   * this to collapse the rail and hand the browser its width back — browser
-   * content wants the room; terminal never had this effect, so it isn't
-   * offered one.
-   */
-  onBrowserOpened?: () => void
-}
-
 interface SpaceQuickActions {
   /** Browser opens a local BrowserView — unavailable in Web mode. */
   canOpenBrowser: boolean
@@ -35,8 +25,7 @@ interface SpaceQuickActions {
   openTerminal: () => Promise<void>
 }
 
-export function useSpaceQuickActions(options: SpaceQuickActionsOptions = {}): SpaceQuickActions {
-  const { onBrowserOpened } = options
+export function useSpaceQuickActions(): SpaceQuickActions {
   const { t } = useTranslation()
   const { openUrl } = useCanvasLifecycle()
   const { available: terminalAvailable, creating: terminalCreating, createAndOpen: openTerminal } = useUserTerminal()
@@ -44,9 +33,8 @@ export function useSpaceQuickActions(options: SpaceQuickActionsOptions = {}): Sp
   const openBrowser = useCallback(() => {
     getBrowserHomepage().then(url => {
       openUrl(url, t('Browser'))
-      onBrowserOpened?.()
     })
-  }, [openUrl, t, onBrowserOpened])
+  }, [openUrl, t])
 
   return {
     canOpenBrowser: !isWebMode,

@@ -690,7 +690,6 @@ interface HaloConfig {
   analytics?: AnalyticsConfig
   // Global layout preferences (panel sizes and visibility)
   layout?: {
-    sidebarOpen?: boolean
     sidebarWidth?: number
     artifactRailWidth?: number
   }

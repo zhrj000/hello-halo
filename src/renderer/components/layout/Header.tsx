@@ -2,13 +2,16 @@
  * Header Component - Cross-platform title bar
  *
  * Handles platform-specific padding for window controls:
- * - macOS Electron: traffic lights sit over the NavRail, not the Header — no inset here
+ * - macOS Electron: traffic lights get their own vertical clearance strip
+ *   above the whole NavRail+Header row (App.tsx) — that's a separate concern
+ *   from this header's own horizontal breathing room, so it still gets the
+ *   same pl-3 as every other platform (prototype: `.header{padding:0 6px 0 12px}`)
  * - Windows/Linux Electron: titleBarOverlay buttons on the right (pr-36)
  * - Capacitor: safe area padding on top (status bar)
- * - Browser/Mobile: no extra padding needed (pl-4)
+ * - Browser/Mobile: no extra padding needed (pl-3 pr-1.5)
  *
- * Height: 40px (compact, modern style)
- * Traffic light vertical center formula: y = height/2 - 7 = 13
+ * Height: 48px, matching the prototype's `.header{height:48px}` — its own
+ * `.hbtn` (36px) needs more breathing room than a 40px row leaves.
  *
  * Single persistent instance, mounted once by `HeaderShell` in the app shell.
  * Pages don't render a `<header>` element themselves — they call `<Header
@@ -53,6 +56,7 @@ export function usePlatform() {
 interface HeaderSlotsContextValue {
   leftEl: HTMLDivElement | null
   rightEl: HTMLDivElement | null
+  titleEl: HTMLDivElement | null
   setHidden: (hidden: boolean) => void
 }
 
@@ -64,6 +68,12 @@ interface HeaderProps {
   /** Right side content (before platform padding) */
   right?: ReactNode
   /**
+   * Centered title (prototype `.header-title`: current conversation name,
+   * single-line, truncated). Stays part of the draggable header — it's
+   * plain text, not interactive.
+   */
+  title?: ReactNode
+  /**
    * Replace the header with a bare drag strip for this page (e.g. a
    * maximized canvas that needs the traffic-light clearance but no chrome).
    * Cleared automatically when the calling page unmounts.
@@ -71,8 +81,8 @@ interface HeaderProps {
   hidden?: boolean
 }
 
-/** Page-facing: portals left/right content into the shell's single header. */
-export function Header({ left, right, hidden }: HeaderProps) {
+/** Page-facing: portals left/right/title content into the shell's single header. */
+export function Header({ left, right, title, hidden }: HeaderProps) {
   const ctx = useContext(HeaderSlotsContext)
 
   // Layout effect, not a passive one: this gates which DOM (real header vs
@@ -86,11 +96,12 @@ export function Header({ left, right, hidden }: HeaderProps) {
     return () => ctx?.setHidden(false)
   }, [hidden, ctx])
 
-  if (!ctx?.leftEl || !ctx?.rightEl) return null
+  if (!ctx?.leftEl || !ctx?.rightEl || !ctx?.titleEl) return null
 
   return (
     <>
       {createPortal(left ?? null, ctx.leftEl)}
+      {createPortal(title ?? null, ctx.titleEl)}
       {createPortal(right ?? null, ctx.rightEl)}
     </>
   )
@@ -116,9 +127,10 @@ export function HeaderShell({ children }: HeaderShellProps) {
 
   const [leftEl, setLeftEl] = useState<HTMLDivElement | null>(null)
   const [rightEl, setRightEl] = useState<HTMLDivElement | null>(null)
+  const [titleEl, setTitleEl] = useState<HTMLDivElement | null>(null)
   const [hidden, setHidden] = useState(false)
 
-  const ctxValue = useMemo(() => ({ leftEl, rightEl, setHidden }), [leftEl, rightEl])
+  const ctxValue = useMemo(() => ({ leftEl, rightEl, titleEl, setHidden }), [leftEl, rightEl, titleEl])
 
   // Platform-specific padding classes
   // macOS: traffic lights now live over the NavRail, Header needs no left inset
@@ -132,11 +144,11 @@ export function HeaderShell({ children }: HeaderShellProps) {
   // content never slides under the buttons when zoomed out.
   const platformPadding = isInElectron
     ? platform.isMac
-      ? 'pr-4'
-      : 'pl-4'
+      ? 'pl-3 pr-1.5'
+      : 'pl-3'
     : isInCapacitor
-      ? 'pl-4 pr-4'    // Capacitor: standard padding, safe area handled by globals.css
-      : 'pl-4 pr-4'    // Browser/Mobile: normal padding
+      ? 'pl-3 pr-1.5'    // Capacitor: standard padding, safe area handled by globals.css
+      : 'pl-3 pr-1.5'    // Browser/Mobile: normal padding
 
   const chromeInset: CSSProperties = isInElectron && !platform.isMac
     ? { paddingRight: 'calc(9rem / var(--display-scale, 1))' }  // 144px for titleBarOverlay buttons
@@ -148,22 +160,17 @@ export function HeaderShell({ children }: HeaderShellProps) {
   return (
     <HeaderSlotsContext.Provider value={ctxValue}>
       {hidden ? (
-        // Bare drag strip: same footprint a maximized canvas needs (draggable,
-        // clears the mac traffic lights) with no chrome content on top of it.
-        // h-10, matching the real header below and NavRail's top spacer —
-        // origin/main had this at h-11 (44px) with no such alignment target
-        // (NavRail didn't exist yet), an existing inconsistency, not one
-        // introduced by this change.
+        // Bare drag strip: same footprint a maximized canvas needs (draggable)
+        // with no chrome content on top of it. Matches the real header's height.
         <div
-          className="h-10 flex-shrink-0 bg-background"
+          className="h-12 flex-shrink-0 bg-background"
           style={{ WebkitAppRegion: 'drag' } as CSSProperties}
         />
       ) : (
-        // Header height: 40px, trafficLightPosition.y should be 40/2 - 7 = 13
         <header
           style={chromeInset}
           className={`
-            flex items-center justify-between h-10 flex-shrink-0
+            flex items-center justify-between h-12 flex-shrink-0
             border-b border-border ${dragClass}
             ${platformPadding}
           `.trim().replace(/\s+/g, ' ')}
@@ -178,14 +185,23 @@ export function HeaderShell({ children }: HeaderShellProps) {
             <div className="no-drag flex items-center gap-2 sm:gap-3 min-w-0" ref={setLeftEl} />
           </div>
 
-          {/* Center: Draggable area - grows to fill space */}
-          <div className="flex-1 min-w-[100px]" />
+          {/* Center: draggable title slot (prototype `.header-title`) — stays
+              part of the drag region since it's plain text, no controls.
+              Portal target itself always renders so empty pages just show a
+              blank draggable strip, matching the prototype's flex:1 filler. */}
+          <div className="flex-1 min-w-[100px] px-2 text-center text-[13px] text-subtle-foreground truncate" ref={setTitleEl} />
 
           {/* Right slot — kept as its own portal-only div; the Capacitor
               switcher is a separate sibling so it never shares DOM-child
               ownership with the portaled content. */}
           <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
             <div className="no-drag flex items-center gap-1 sm:gap-2" ref={setRightEl} />
+            {/* Divider between the app's own header buttons and the native
+                titleBarOverlay buttons living in chromeInset's reserved
+                padding — without it the two groups visually run together. */}
+            {isInElectron && !platform.isMac && (
+              <div className="w-px h-5 bg-border flex-shrink-0" />
+            )}
             {isInCapacitor && (
               <div className="no-drag">
                 <button

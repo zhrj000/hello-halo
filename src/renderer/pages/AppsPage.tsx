@@ -2,29 +2,34 @@
  * Apps Page
  *
  * Top-level page for the Apps system. Accessible from SpacePage header.
- * Layout: Header + tab bar + split pane (app list sidebar | detail area).
+ * Layout: Header + tab bar + two-level navigation (full-width list, or
+ * full-width detail with a back button) — the same structure at every
+ * viewport width, desktop included. There is no side-by-side split pane.
  *
  * Session Detail drill-down:
  * When viewing a run's execution trace, a breadcrumb bar replaces the
  * AutomationHeader. Clicking the app name in the breadcrumb returns to
- * the Activity Thread without losing left-sidebar selection.
+ * the Activity Thread without losing the current selection.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useAppStore } from '../stores/app.store'
 import { useSpaceStore } from '../stores/space.store'
 import { useAppsStore } from '../stores/apps.store'
 import { useAppsPageStore, tabForAppType } from '../stores/apps-page.store'
+import { useSearchStore } from '../stores/search.store'
 import type { AppType } from '../../shared/apps/spec-types'
 import { Header } from '../components/layout/Header'
-import { AppList } from '../components/apps/AppList'
+import { SearchIcon } from '../components/search/SearchIcon'
+import { AutomationCardWall } from '../components/apps/AutomationCardWall'
+import { SkillCardWall } from '../components/apps/SkillCardWall'
+import { McpCardWall } from '../components/apps/McpCardWall'
 import { AutomationHeader } from '../components/apps/AutomationHeader'
+import { AppOverviewPanel } from '../components/apps/AppOverviewPanel'
 import { LoginNoticeBar } from '../components/apps/LoginNoticeBar'
 import { ActivityThread } from '../components/apps/ActivityThread'
 import { SessionDetailView } from '../components/apps/SessionDetailView'
-import { AppChatView } from '../components/apps/AppChatView'
-import { AppChatContainer } from '../components/apps/AppChatContainer'
 import { AppConfigPanel } from '../components/apps/AppConfigPanel'
+import { AppBotSessionsView } from '../components/apps/AppBotSessionsView'
 import { McpStatusCard } from '../components/apps/McpStatusCard'
 import { SkillInfoCard } from '../components/apps/SkillInfoCard'
 import { EmptyState } from '../components/apps/EmptyState'
@@ -34,13 +39,12 @@ import { SkillInstallDialog } from '../components/apps/SkillInstallDialog'
 import { UninstalledDetailView } from '../components/apps/UninstalledDetailView'
 import { useTranslation, getCurrentLanguage } from '../i18n'
 import { resolveSpecI18n } from '../utils/spec-i18n'
-import { useIsMobile } from '../hooks/useIsMobile'
 import { api } from '../api'
-import { ChevronLeft, ChevronRight, Settings } from 'lucide-react'
+import { ChevronRight, ArrowLeft } from 'lucide-react'
 
 export function AppsPage() {
   const { t } = useTranslation()
-  const { navigate } = useAppStore()
+  const { openSearch } = useSearchStore()
   const haloSpace = useSpaceStore(state => state.haloSpace)
   const spaces = useSpaceStore(state => state.spaces)
   const { apps, loadApps, updateAppOverrides } = useAppsStore()
@@ -53,13 +57,12 @@ export function AppsPage() {
     showInstallDialog,
     selectApp,
     clearSelection,
+    openAppOverview,
     openActivityThread,
     setInitialAppId,
     setShowInstallDialog,
     openMarketplaceFilteredBy,
   } = useAppsPageStore()
-
-  const isMobile = useIsMobile()
 
   /** When set, ManualAddDialog opens pre-targeted to that type (skips chooser) */
   const [manualAddType, setManualAddType] = useState<'mcp' | 'skill' | null>(null)
@@ -93,7 +96,7 @@ export function AppsPage() {
   }, [loadApps])
 
   // Fetch available updates on mount and stay subscribed to push events so
-  // the "Update" badge in AppListItem stays fresh without polling.
+  // the store's "Update" affordances stay fresh without polling.
   const checkUpdatesAction = useAppsPageStore(s => s.checkUpdates)
   useEffect(() => {
     void checkUpdatesAction()
@@ -152,18 +155,6 @@ export function AppsPage() {
     }
   }, [currentTab, clearSelection, apps, selectedAppId])
 
-  // Auto-select first app for the current tab if nothing selected (desktop only —
-  // on mobile the user should see the full-width list first and tap to select)
-  useEffect(() => {
-    if (isMobile) return
-    if (!selectedAppId && appsForCurrentTab.length > 0) {
-      const activeApps = appsForCurrentTab.filter(a => a.status !== 'uninstalled')
-      const waitingApp = activeApps.find(a => a.status === 'waiting_user')
-      const firstApp = waitingApp ?? activeApps[0] ?? appsForCurrentTab[0]
-      selectApp(firstApp.id, firstApp.status === 'uninstalled' ? 'uninstalled' : firstApp.spec.type, firstApp.spaceId ?? undefined)
-    }
-  }, [appsForCurrentTab, selectedAppId, selectApp, isMobile])
-
   // Resolve the selected app (for breadcrumb and detail panel)
   const selectedApp = useMemo(
     () => apps.find(a => a.id === selectedAppId),
@@ -185,13 +176,12 @@ export function AppsPage() {
     return !selectedApp.userOverrides?.loginNoticeDismissed
   }, [selectedApp, resolvedSpec])
 
-  const isSessionDetail = detailView?.type === 'session-detail'
-  const isAppChat = detailView?.type === 'app-chat'
+  const isSessionDetail = detailView?.type === 'session-detail' || detailView?.type === 'bot-sessions'
   const isAppConfig = detailView?.type === 'app-config'
   const isUninstalledDetail = detailView?.type === 'uninstalled-detail'
 
   // Right-pane EmptyState is informational only; install/browse CTAs live
-  // exclusively in the AppList sidebar to avoid double action surfaces.
+  // exclusively in each card wall to avoid double action surfaces.
   const emptyStateVariant = currentTab === 'my-skills'
     ? 'skill' as const
     : currentTab === 'my-mcp'
@@ -209,6 +199,8 @@ export function AppsPage() {
     }
 
     switch (detailView.type) {
+      case 'app-overview':
+        return <AppOverviewPanel appId={detailView.appId} />
       case 'activity-thread':
         return <ActivityThread appId={detailView.appId} />
       case 'session-detail':
@@ -218,17 +210,18 @@ export function AppsPage() {
             runId={detailView.runId}
           />
         )
-      case 'app-chat':
+      case 'bot-sessions':
         return (
-          <AppChatContainer
+          <AppBotSessionsView
             appId={detailView.appId}
-            spaceId={detailView.spaceId}
+            spaceId={selectedApp?.spaceId ?? ''}
+            instanceId={detailView.instanceId}
           />
         )
       case 'app-config':
         return <AppConfigPanel appId={detailView.appId} spaceName={selectedApp?.spaceId ? spaceMap[selectedApp.spaceId] : t('Global')} />
       case 'mcp-status':
-        return <McpStatusCard appId={detailView.appId} />
+        return <McpStatusCard appId={detailView.appId} spaceName={selectedApp?.spaceId ? spaceMap[selectedApp.spaceId] : t('Global')} />
       case 'skill-info':
         return <SkillInfoCard appId={detailView.appId} spaceName={selectedApp?.spaceId ? spaceMap[selectedApp.spaceId] : t('Global')} />
       case 'uninstalled-detail':
@@ -245,83 +238,106 @@ export function AppsPage() {
 
   return (
     <div className="h-full flex flex-col bg-background">
-      {/* Header */}
+      {/* Header — .header.plain: non-conversation pages show global search,
+          not a settings button (settings lives in NavRail). The search
+          control sits in the left slot, not the right, so it's the same
+          position in both chat and plain header modes. */}
       <Header
-        right={
-          <button
-            onClick={() => navigate('settings')}
-            className="p-1.5 hover:bg-secondary rounded-lg transition-colors"
-            title={t('Settings')}
-          >
-            <Settings className="w-5 h-5" />
-          </button>
+        left={
+          <>
+            {selectedAppId && selectedAppName ? (
+              <h1 className="text-[15px] font-semibold text-foreground truncate flex-shrink-0 max-w-[240px]">
+                {selectedAppName}
+              </h1>
+            ) : (
+              <h1 className="text-[15px] font-semibold text-foreground flex-shrink-0">
+                {t('Digital Humans · Extensions')}
+              </h1>
+            )}
+            <SearchIcon onClick={() => openSearch('global')} />
+          </>
         }
       />
 
-      {/* Tab bar — kept provider-agnostic via TabButton sub-component */}
-      <div className="flex items-center gap-1 px-3 sm:px-4 py-2 border-b border-border flex-shrink-0 overflow-x-auto">
-        <TabButton
-          active={currentTab === 'my-digital-humans'}
-          label={t('My Digital Humans')}
-          onClick={() => setCurrentTab('my-digital-humans')}
-        />
-        <TabButton
-          active={currentTab === 'my-skills'}
-          label={t('My Skills')}
-          onClick={() => setCurrentTab('my-skills')}
-        />
-        <TabButton
-          active={currentTab === 'my-mcp'}
-          label={t('My MCP')}
-          onClick={() => setCurrentTab('my-mcp')}
-        />
-      </div>
-
-      {/* Content area */}
-      {!isMobile ? (
-        /* ── Desktop: split layout — left sidebar + right detail (unchanged) ── */
-        <div className="flex-1 flex overflow-hidden">
-          {/* Left: App list (fixed 240px width) */}
-          <div className="w-60 flex-shrink-0 border-r border-border flex flex-col overflow-hidden">
-            {currentTab === 'my-skills' ? (
-              <AppList
-                mode="skill"
-                onInstall={() => handleBrowseMarketplace('skill')}
-                onManualAdd={() => setShowSkillInstallDialog(true)}
-                spaceMap={spaceMap}
-              />
-            ) : currentTab === 'my-mcp' ? (
-              <AppList
-                mode="mcp"
-                onInstall={() => handleBrowseMarketplace('mcp')}
-                onManualAdd={() => setManualAddType('mcp')}
-                spaceMap={spaceMap}
-              />
-            ) : (
-              <AppList
-                mode="automation"
-                onInstall={() => setShowInstallDialog(true)}
-                spaceMap={spaceMap}
-              />
-            )}
+      {/* List chrome (page title/lead + tab bar) — hidden while a detail view
+          is open: the prototype swaps the whole list block for the detail page
+          (agentList hidden, #pageTitle becomes the app name), so the detail
+          page owns its full vertical space and its own back button. */}
+      {!selectedAppId && (
+        <>
+          {/* Page title/lead — outer container only, per §4.12: doesn't touch the
+              existing tab bar / content area's own spacing below it. */}
+          <div className="px-4 sm:px-10 pt-5 sm:pt-7 flex-shrink-0">
+            <h1 className="text-xl font-semibold mb-1">{t('Digital Humans · Extensions')}</h1>
+            <p className="text-[13px] text-muted-foreground mb-5">
+              {t('Manage all installed digital humans, Skills, and MCPs.')}
+            </p>
           </div>
 
-          {/* Right: Detail panel */}
-          <div className="flex-1 flex flex-col overflow-hidden">
+          {/* Tab bar — kept provider-agnostic via TabButton sub-component */}
+          <div className="flex items-center gap-1 mx-4 sm:mx-10 border-b border-border flex-shrink-0 overflow-x-auto">
+            <TabButton
+              active={currentTab === 'my-digital-humans'}
+              label={t('My Digital Humans')}
+              count={apps.filter(a => a.spec.type === 'automation').length}
+              onClick={() => setCurrentTab('my-digital-humans')}
+            />
+            <TabButton
+              active={currentTab === 'my-skills'}
+              label={t('My Skills')}
+              count={apps.filter(a => a.spec.type === 'skill').length}
+              onClick={() => setCurrentTab('my-skills')}
+            />
+            <TabButton
+              active={currentTab === 'my-mcp'}
+              label={t('My MCP')}
+              count={apps.filter(a => a.spec.type === 'mcp').length}
+              onClick={() => setCurrentTab('my-mcp')}
+            />
+          </div>
+        </>
+      )}
+
+      {/* Content area */}
+      {/*
+        Two-level navigation, same structure at every width: full-width list,
+        or full-width detail with a back button. No side-by-side split pane —
+        desktop and mobile share this one code path.
+      */}
+      <div className="flex-1 flex flex-col overflow-hidden">
+        {selectedAppId ? (
+          <>
+            {/* Every detail view owns its back button (AutomationHeader,
+                SkillInfoCard, McpStatusCard, UninstalledDetailView); session
+                detail has the breadcrumb's own back arrow instead. No generic
+                fallback bar — one was kept here historically for views that
+                hadn't been given their own yet, but that's now none of them,
+                and it produced a second back button stacked above McpStatusCard's. */}
+
             {/* Session detail breadcrumb — replaces AutomationHeader when drilling into a specific run */}
             {isSessionDetail && selectedApp && (
-              <SessionBreadcrumb
-                appName={selectedAppName ?? ''}
-                runId={(detailView as { runId: string }).runId}
-                onBack={() => openActivityThread(selectedApp.id)}
-              />
+              detailView?.type === 'bot-sessions' ? (
+                // No secondary label: the left pane's contact list and the
+                // selected conversation's own info bar already say who this
+                // is. Back returns to Overview, where bot rows link in from.
+                <SessionBreadcrumb
+                  appName={selectedAppName ?? ''}
+                  onBack={() => openAppOverview(selectedApp.id)}
+                />
+              ) : (
+                <SessionBreadcrumb
+                  appName={selectedAppName ?? ''}
+                  runId={(detailView as { runId: string }).runId}
+                  onBack={() => openActivityThread(selectedApp.id)}
+                />
+              )
             )}
 
             {/* Automation persona card + tab bar — shown for all automation views except session detail drill-down */}
-            {!isSessionDetail && !isUninstalledDetail && selectedAppId && selectedApp?.spec.type === 'automation' && (
+            {!isSessionDetail && !isUninstalledDetail && selectedApp?.spec.type === 'automation' && (
               <>
-                <AutomationHeader appId={selectedAppId} spaceName={selectedApp?.spaceId ? spaceMap[selectedApp.spaceId] : t('Global')} />
-                {showLoginNotice && resolvedSpec?.browser_login && detailView?.type === 'activity-thread' && (
+                <AutomationHeader appId={selectedAppId} />
+                {showLoginNotice && resolvedSpec?.browser_login && (detailView?.type === 'app-overview' || detailView?.type === 'activity-thread') && (
                   <LoginNoticeBar
                     browserLogin={resolvedSpec.browser_login}
                     onDismiss={() => {
@@ -337,88 +353,38 @@ export function AppsPage() {
               </>
             )}
 
-            {/* Detail content — app-chat manages its own scroll + flex layout */}
-            <div className={`flex-1 ${isAppChat || isSessionDetail ? 'overflow-hidden' : 'overflow-y-auto'}`}>
+            {/* Detail content — session-detail manages its own scroll + flex layout */}
+            <div className={`flex-1 ${isSessionDetail ? 'overflow-hidden' : 'overflow-y-auto'}`}>
               {renderDetail()}
             </div>
-          </div>
-        </div>
-      ) : (
-        /* ── Mobile: list OR detail (push navigation) ── */
-        <div className="flex-1 flex flex-col overflow-hidden">
-          {selectedAppId ? (
-            <>
-              {/* Back button */}
-              <div className="flex items-center gap-2 px-3 py-2 border-b border-border flex-shrink-0">
-                <button
-                  onClick={clearSelection}
-                  className="flex items-center gap-1 text-sm text-primary"
-                >
-                  <ChevronLeft className="w-4 h-4" />
-                  {t('Back')}
-                </button>
-              </div>
-
-              {/* Session detail breadcrumb */}
-              {isSessionDetail && selectedApp && (
-                <SessionBreadcrumb
-                  appName={selectedAppName ?? ''}
-                  runId={(detailView as { runId: string }).runId}
-                  onBack={() => openActivityThread(selectedApp.id)}
-                />
-              )}
-
-              {/* Automation header */}
-              {!isSessionDetail && !isUninstalledDetail && selectedApp?.spec.type === 'automation' && (
-                <>
-                  <AutomationHeader appId={selectedAppId} spaceName={selectedApp?.spaceId ? spaceMap[selectedApp.spaceId] : t('Global')} />
-                  {showLoginNotice && resolvedSpec?.browser_login && detailView?.type === 'activity-thread' && (
-                    <LoginNoticeBar
-                      browserLogin={resolvedSpec.browser_login}
-                      onDismiss={() => {
-                        if (selectedAppId) {
-                          updateAppOverrides(selectedAppId, { loginNoticeDismissed: true })
-                        }
-                      }}
-                      onOpenBrowser={(url, label) => {
-                        api.openLoginWindow(url, label)
-                      }}
-                    />
-                  )}
-                </>
-              )}
-
-              {/* Detail content */}
-              <div className={`flex-1 ${isAppChat || isSessionDetail ? 'overflow-hidden' : 'overflow-y-auto'}`}>
-                {renderDetail()}
-              </div>
-            </>
-          ) : (
-            /* No selection: full-width list */
-            currentTab === 'my-skills' ? (
-              <AppList
-                mode="skill"
-                onInstall={() => handleBrowseMarketplace('skill')}
-                onManualAdd={() => setShowSkillInstallDialog(true)}
+          </>
+        ) : (
+          /* No selection: full-width list — outer container owns the gutter so
+             the toolbar's border-b inlines with the tab bar above, and the
+             walls don't re-add per-section padding. */
+          <div className="flex-1 min-h-0 px-4 sm:px-10 flex flex-col">
+            {currentTab === 'my-skills' ? (
+              <SkillCardWall
                 spaceMap={spaceMap}
+                onBrowseStore={() => handleBrowseMarketplace('skill')}
+                onManualAdd={() => setShowSkillInstallDialog(true)}
               />
             ) : currentTab === 'my-mcp' ? (
-              <AppList
-                mode="mcp"
-                onInstall={() => handleBrowseMarketplace('mcp')}
-                onManualAdd={() => setManualAddType('mcp')}
+              <McpCardWall
                 spaceMap={spaceMap}
+                onBrowseStore={() => handleBrowseMarketplace('mcp')}
+                onManualAdd={() => setManualAddType('mcp')}
               />
             ) : (
-              <AppList
-                mode="automation"
-                onInstall={() => setShowInstallDialog(true)}
+              <AutomationCardWall
                 spaceMap={spaceMap}
+                onInstall={() => setShowInstallDialog(true)}
+                onBrowseStore={() => handleBrowseMarketplace('automation')}
               />
-            )
-          )}
-        </div>
-      )}
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Install dialog */}
       {showInstallDialog && (
@@ -454,20 +420,24 @@ export function AppsPage() {
 interface TabButtonProps {
   active: boolean
   label: string
+  count?: number
   onClick: () => void
 }
 
-function TabButton({ active, label, onClick }: TabButtonProps) {
+function TabButton({ active, label, count, onClick }: TabButtonProps) {
   return (
     <button
       onClick={onClick}
-      className={`px-3 py-1.5 text-sm rounded-md transition-colors whitespace-nowrap ${
+      className={`h-[34px] px-3.5 -mb-px border-b-2 text-[13px] font-medium transition-colors ease-halo whitespace-nowrap ${
         active
-          ? 'bg-secondary text-foreground font-medium'
-          : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'
+          ? 'border-primary text-foreground'
+          : 'border-transparent text-subtle-foreground hover:text-foreground'
       }`}
     >
       {label}
+      {typeof count === 'number' && (
+        <span className="ml-1 text-[11px] text-subtle-foreground">{count}</span>
+      )}
     </button>
   )
 }
@@ -490,12 +460,12 @@ function SessionBreadcrumb({ appName, runId, label, onBack }: SessionBreadcrumbP
   const displayLabel = label || (shortRunId ? `${t('Run')} ${shortRunId}` : '')
 
   return (
-    <div className="flex items-center gap-1.5 px-4 py-2.5 border-b border-border bg-muted/30 flex-shrink-0">
+    <div className="flex items-center gap-1.5 px-4 sm:px-10 py-2.5 border-b border-border bg-muted/30 flex-shrink-0">
       <button
         onClick={onBack}
-        className="flex items-center gap-1 text-sm text-primary hover:text-primary/80 transition-colors font-medium"
+        className="flex items-center gap-1.5 text-sm text-primary hover:text-primary/80 transition-colors font-medium"
       >
-        <ChevronLeft className="w-3.5 h-3.5" />
+        <ArrowLeft className="w-4 h-4" />
         {appName}
       </button>
       {displayLabel && (

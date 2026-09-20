@@ -9,54 +9,39 @@
  */
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
-import { Play, Pause, RotateCcw, RefreshCw, Globe, ExternalLink, MessageSquare, Activity, Cog, ChevronRight, Share2 } from 'lucide-react'
+import { Play, Pause, RotateCcw, Globe, ExternalLink, LayoutDashboard, MessageSquare, Activity, Cog, ChevronRight, ArrowLeft } from 'lucide-react'
 import { AutomationAvatar } from './AutomationAvatar'
 import { useAppsStore } from '../../stores/apps.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
-import { AppStatusDot } from './AppStatusDot'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { resolveSpecI18n } from '../../utils/spec-i18n'
+import { automationStatusLabel, automationStatusTextClass, deriveAutomationStatus } from '../../utils/automation-status'
+import { formatElapsed, formatTimeAgo } from '../../utils/format-time'
+import { AppStatusDot } from './AppStatusDot'
+import { AppLifecycleMenu } from './AppLifecycleMenu'
 import { resolvePermission } from '../../../shared/apps/app-types'
 import { api } from '../../api'
-import { useSpaceStore } from '../../stores/space.store'
-import { useAppStore } from '../../stores/app.store'
-import { ShareCurrentAppDialog } from '../store/ShareCurrentAppDialog'
-import type { BrowserLoginEntry } from '../../../shared/apps/spec-types'
+import { navigateToAppChat } from '../pulse'
+import { getAppChatConversationId } from '../../../shared/apps/im-keys'
 
 interface AutomationHeaderProps {
   appId: string
-  /** Space name to display in the header subtitle */
-  spaceName?: string
 }
 
-// Friendly, human-feeling status labels
-function statusLabel(s: string, t: (key: string) => string): string {
-  switch (s) {
-    case 'running': return t('Working')
-    case 'queued': return t('Queued')
-    case 'idle': return t('Standing by')
-    case 'waiting_user': return t('Waiting for you')
-    case 'paused': return t('Standing by')
-    case 'error': return t('Encountered an issue')
-    default: return s
-  }
-}
+// Chatting with this digital human happens on the main conversation board,
+// opened via the "Chat" action button in the persona card, not a tab here.
+export type AutomationTab = 'overview' | 'activity' | 'config'
 
-export type AutomationTab = 'chat' | 'activity' | 'config'
-
-export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
+export function AutomationHeader({ appId }: AutomationHeaderProps) {
   const { t } = useTranslation()
   const { apps, appStates, pauseApp, resumeApp, triggerApp } = useAppsStore()
-  const { openAppConfig, openAppChat, openActivityThread, detailView } = useAppsPageStore()
+  const { openAppConfig, openActivityThread, openAppOverview, detailView, clearSelection } = useAppsPageStore()
   const app = apps.find(a => a.id === appId)
   const runtimeState = appStates[appId]
 
   // Browser popover state
   const [showBrowserPopover, setShowBrowserPopover] = useState(false)
   const popoverRef = useRef<HTMLDivElement>(null)
-
-  // Share dialog state
-  const [showShareDialog, setShowShareDialog] = useState(false)
 
   // Close popover on outside click
   useEffect(() => {
@@ -75,19 +60,27 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
     api.openLoginWindow(url, label)
   }, [])
 
+  // Keeps the running elapsed counter moving; idle states need no tick.
+  const [, forceTick] = useState(0)
+  const isTicking = runtimeState?.status === 'running'
+  useEffect(() => {
+    if (!isTicking) return
+    const id = setInterval(() => forceTick(v => v + 1), 1000)
+    return () => clearInterval(id)
+  }, [isTicking])
+
   // Derive current tab from detailView
   const currentTab: AutomationTab = useMemo(() => {
-    if (detailView?.type === 'app-chat') return 'chat'
     if (detailView?.type === 'app-config') return 'config'
-    return 'activity'
+    if (detailView?.type === 'activity-thread') return 'activity'
+    return 'overview'
   }, [detailView])
 
   if (!app) return null
 
-  const { name, browser_login } = resolveSpecI18n(app.spec, getCurrentLanguage())
+  const { name, description, browser_login } = resolveSpecI18n(app.spec, getCurrentLanguage())
   const status = app.status
-  const runtimeStatus = runtimeState?.status
-  const effectiveStatus = runtimeStatus ?? (status === 'active' ? 'idle' : status)
+  const effectiveStatus = deriveAutomationStatus(status, runtimeState?.status)
   const isAutomation = app.spec.type === 'automation'
 
   const isWaiting = status === 'waiting_user'
@@ -95,148 +88,124 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
   const isRunning = effectiveStatus === 'running'
   const isQueued = effectiveStatus === 'queued'
 
+  // The header is the only surface present on every tab, so it carries the
+  // one-line "what is it doing right now" that Overview's status grid shows.
+  const statusDetail = isRunning && runtimeState?.runningAtMs
+    ? formatElapsed(runtimeState.runningAtMs)
+    : runtimeState?.nextRunAtMs && (effectiveStatus === 'idle' || effectiveStatus === 'queued')
+      ? t('next {{time}}', { time: new Date(runtimeState.nextRunAtMs).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) })
+      : runtimeState?.lastRunAtMs
+        ? formatTimeAgo(runtimeState.lastRunAtMs, t)
+        : null
+
   // Browser button visibility
   const hasBrowserLogin = browser_login && browser_login.length > 0
   const hasAiBrowser = resolvePermission(app, 'ai-browser')
   const showBrowserButton = hasBrowserLogin || hasAiBrowser
 
-  // Next run info
-  let nextRunLabel: string | null = null
-  if (isAutomation && runtimeState?.nextRunAtMs) {
-    const diff = runtimeState.nextRunAtMs - Date.now()
-    if (diff > 0) {
-      const mins = Math.floor(diff / 60_000)
-      const hrs = Math.floor(mins / 60)
-      nextRunLabel = hrs > 0
-        ? t('Next run in {{count}}h', { count: hrs })
-        : t('Next run in {{count}}m', { count: mins })
-    }
-  }
-
-  // Frequency label
-  const sub = app.spec.type === 'automation' ? app.spec.subscriptions?.[0] : undefined
-  let freqLabel: string | null = null
-  if (sub) {
-    const subId = sub.id ?? '0'
-    const userOverride = app.userOverrides?.frequency?.[subId]
-    if (userOverride) {
-      freqLabel = userOverride
-    } else if (sub.frequency?.default) {
-      freqLabel = sub.frequency.default
-    } else if (sub.source.type === 'schedule') {
-      freqLabel = sub.source.config.every ?? sub.source.config.cron ?? null
-    }
-  }
-
-  // Last activity summary from runtime state
-  const lastRunLabel = runtimeState?.lastRunAtMs
-    ? formatTimeAgo(runtimeState.lastRunAtMs, t)
-    : null
-
   // Tab click handlers
-  const handleTabChat = () => {
-    if (app.spaceId) {
-      openAppChat(appId, app.spaceId)
-    }
-  }
+  const handleTabOverview = () => openAppOverview(appId)
   const handleTabActivity = () => openActivityThread(appId)
   const handleTabConfig = () => openAppConfig(appId)
 
   const tabs: { key: AutomationTab; label: string; icon: typeof MessageSquare; onClick: () => void }[] = [
-    { key: 'chat', label: t('Chat'), icon: MessageSquare, onClick: handleTabChat },
+    { key: 'overview', label: t('Overview'), icon: LayoutDashboard, onClick: handleTabOverview },
     { key: 'activity', label: t('Activity'), icon: Activity, onClick: handleTabActivity },
     { key: 'config', label: t('Settings'), icon: Cog, onClick: handleTabConfig },
   ]
 
+  // R8: jumps to the main conversation board with this digital human
+  // selected. Global apps (no home space, D3/G8) open in the current space
+  // rather than a no-op — see navigateToAppChat's appSpaceId param.
+  const handleOpenChat = () => {
+    navigateToAppChat(app.spaceId ?? null, appId, getAppChatConversationId(appId))
+  }
+
   return (
-    <div className="flex-shrink-0 border-b border-border">
+    <div className="flex-shrink-0">
+      {/* ── Back to list ── */}
+      <div className="px-4 sm:px-10 pt-6">
+        <button
+          onClick={clearSelection}
+          className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          {t('My Digital Humans')}
+        </button>
+      </div>
+
       {/* ── Persona Card ── */}
-      <div className="flex items-start gap-3 px-4 pt-4 pb-3">
+      <div className="flex items-start gap-3.5 px-4 sm:px-10 pt-6 pb-6">
         {/* Avatar */}
-        <div className="flex-shrink-0 rounded-xl overflow-hidden">
-          <AutomationAvatar name={name || appId} size={44} />
+        <div className="flex-shrink-0 rounded-2xl overflow-hidden">
+          <AutomationAvatar name={name || appId} size={52} />
         </div>
 
         {/* Info */}
         <div className="min-w-0 flex-1">
-          <h2 className="text-sm font-semibold text-foreground truncate leading-tight">{name}</h2>
-          <div className="flex items-center gap-1.5 mt-0.5">
-            <AppStatusDot status={status} runtimeStatus={runtimeStatus} size="sm" />
-            <span className="text-xs text-muted-foreground">
-              {statusLabel(effectiveStatus, t)}
-              {freqLabel && <span className="mx-1">·</span>}
-              {freqLabel && <span>{freqLabel}</span>}
-            </span>
+          <div className="flex items-center gap-2.5 min-w-0 flex-wrap">
+            <h2 className="text-xl font-semibold text-foreground truncate leading-tight">{name}</h2>
+            {isAutomation && (
+              <span className="inline-flex items-center gap-1.5 flex-shrink-0">
+                <AppStatusDot status={app.status} runtimeStatus={runtimeState?.status} />
+                <span className={`text-xs ${automationStatusTextClass(effectiveStatus)}`}>
+                  {automationStatusLabel(effectiveStatus, t)}
+                </span>
+                {statusDetail && (
+                  <span className="text-xs text-muted-foreground">· {statusDetail}</span>
+                )}
+              </span>
+            )}
           </div>
-          {(nextRunLabel || lastRunLabel || (spaceName && app.spaceId)) && (
-            <p className="text-[11px] text-muted-foreground/60 mt-0.5 truncate flex items-center gap-0">
-              {lastRunLabel && <span>{t('Last run')} {lastRunLabel}</span>}
-              {lastRunLabel && nextRunLabel && <span className="mx-1">·</span>}
-              {nextRunLabel && <span>{nextRunLabel}</span>}
-              {spaceName && app.spaceId && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    const spaceStore = useSpaceStore.getState()
-                    const target = spaceStore.spaces.find(s => s.id === app.spaceId) ?? spaceStore.haloSpace
-                    if (target) {
-                      spaceStore.setCurrentSpace(target)
-                      useAppStore.getState().navigate('space')
-                    }
-                  }}
-                  className="inline-flex items-center gap-1 ml-1.5 px-1.5 py-0.5 rounded-sm bg-secondary/50 text-muted-foreground hover:bg-secondary hover:text-primary transition-colors text-[11px] leading-tight"
-                  title={t('Go to workspace')}
-                >
-                  <span className="truncate max-w-[120px]">{t('Workspace')}: {spaceName}</span>
-                  <ChevronRight className="w-3 h-3 flex-shrink-0 opacity-60" />
-                </button>
-              )}
-            </p>
+          {description && (
+            <p className="text-[13px] text-muted-foreground mt-[5px] line-clamp-2">{description}</p>
           )}
         </div>
 
         {/* Action buttons */}
         {isAutomation && (
-          <div className="flex items-center gap-0.5 flex-shrink-0">
-            {/* Trigger now (also available when paused — backend auto-resumes) */}
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {/* Chat (R8) — jumps to the main conversation board with this
+                digital human selected; the detail page itself no longer
+                embeds a Chat tab (R7). Leads the row: it's the most common
+                action, everything else is app-lifecycle management. */}
+            <button
+              onClick={handleOpenChat}
+              className="inline-flex items-center gap-1.5 h-9 px-4 rounded-[9px] bg-primary border border-primary text-[13px] font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+            >
+              <MessageSquare className="w-3.5 h-3.5" /> {t('Chat')}
+            </button>
+
+            {/* Run now (also available when paused — backend auto-resumes) */}
             {!isWaiting && (
               <button
                 onClick={() => triggerApp(appId)}
                 disabled={isRunning || isQueued}
                 title={isQueued ? t('Queued — waiting for a run slot') : isPaused ? t('Resume and run now') : t('Run now')}
-                className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-md transition-colors disabled:opacity-40"
+                className="inline-flex items-center gap-1.5 h-9 px-4 rounded-[9px] border border-border bg-secondary text-[13px] font-medium text-foreground hover:bg-secondary/80 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                <Play className="w-3.5 h-3.5" />
+                <Play className="w-3.5 h-3.5" /> {t('Run now')}
               </button>
             )}
 
-            {/* Retry */}
-            {status === 'error' && (
-              <button
-                onClick={() => triggerApp(appId)}
-                title={t('Retry now')}
-                className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-md transition-colors"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-              </button>
-            )}
-
-            {/* Pause / Resume */}
+            {/* Pause / Enable — distinct copy from Skill/MCP's generic
+                Enable/Disable toggle (SkillCard.tsx, McpCard.tsx, etc.):
+                this one turns the app's own scheduled/triggered runs on or
+                off, not a dependency other things use, so "automatic tasks"
+                names what's actually being toggled. */}
             {isPaused ? (
               <button
                 onClick={() => resumeApp(appId)}
-                title={t('Resume')}
-                className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-md transition-colors"
+                className="inline-flex items-center gap-1.5 h-9 px-4 rounded-[9px] border border-border bg-secondary text-[13px] font-medium text-foreground hover:bg-secondary/80 transition-colors"
               >
-                <RefreshCw className="w-3.5 h-3.5" />
+                <RotateCcw className="w-3.5 h-3.5" /> {t('Enable automatic tasks')}
               </button>
             ) : (
               <button
                 onClick={() => pauseApp(appId)}
-                title={t('Pause')}
-                className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-md transition-colors"
+                className="inline-flex items-center gap-1.5 h-9 px-4 rounded-[9px] border border-border bg-secondary text-[13px] font-medium text-foreground hover:bg-secondary/80 transition-colors"
               >
-                <Pause className="w-3.5 h-3.5" />
+                <Pause className="w-3.5 h-3.5" /> {t('Pause automatic tasks')}
               </button>
             )}
 
@@ -252,8 +221,6 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
                 </button>
                 {showBrowserPopover && (
                   <BrowserLoginPopover
-                    entries={browser_login ?? []}
-                    onOpen={handleOpenBrowser}
                     onOpenCustomUrl={(url) => handleOpenBrowser(url, t('Browser'))}
                     t={t}
                   />
@@ -261,46 +228,35 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
               </div>
             )}
 
-            {/* Share */}
-            <button
-              onClick={() => setShowShareDialog(true)}
-              title={t('Share')}
-              className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-md transition-colors"
-            >
-              <Share2 className="w-3.5 h-3.5" />
-            </button>
+            {/* Restart / share / export / clear memory / uninstall */}
+            <AppLifecycleMenu appId={appId} spaceId={app.spaceId} />
           </div>
         )}
       </div>
 
-      {showShareDialog && (
-        <ShareCurrentAppDialog
-          appId={appId}
-          onClose={() => setShowShareDialog(false)}
-        />
-      )}
-
       {/* ── Tab Bar ── */}
       {isAutomation && (
-        <div className="flex items-center gap-0.5 px-4">
-          {tabs.map(tab => {
-            const Icon = tab.icon
-            const isActive = currentTab === tab.key
-            return (
-              <button
-                key={tab.key}
-                onClick={tab.onClick}
-                className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors border-b-2 -mb-px ${
-                  isActive
-                    ? 'text-foreground border-foreground'
-                    : 'text-muted-foreground border-transparent hover:text-foreground hover:border-border'
-                }`}
-              >
-                <Icon className="w-3.5 h-3.5" />
-                {tab.label}
-              </button>
-            )
-          })}
+        <div className="px-4 sm:px-10">
+          <div className="flex items-center gap-0.5 border-b border-border">
+            {tabs.map(tab => {
+              const Icon = tab.icon
+              const isActive = currentTab === tab.key
+              return (
+                <button
+                  key={tab.key}
+                  onClick={tab.onClick}
+                  className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors border-b-2 -mb-px ${
+                    isActive
+                      ? 'text-foreground border-foreground'
+                      : 'text-muted-foreground border-transparent hover:text-foreground hover:border-border'
+                  }`}
+                >
+                  <Icon className="w-3.5 h-3.5" />
+                  {tab.label}
+                </button>
+              )
+            })}
+          </div>
         </div>
       )}
     </div>
@@ -308,34 +264,18 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
 }
 
 // ──────────────────────────────────────────────
-// Helpers
-// ──────────────────────────────────────────────
-
-function formatTimeAgo(timestamp: number, t: (s: string, opts?: Record<string, unknown>) => string): string {
-  const diff = Date.now() - timestamp
-  // Handle future timestamps (clock skew) - return "just now" for any negative diff
-  if (diff <= 0) return t('just now')
-  const mins = Math.floor(diff / 60_000)
-  if (mins < 1) return t('just now')
-  if (mins < 60) return t('{{count}}m ago', { count: mins })
-  const hrs = Math.floor(mins / 60)
-  if (hrs < 24) return t('{{count}}h ago', { count: hrs })
-  const days = Math.floor(hrs / 24)
-  return t('{{count}}d ago', { count: days })
-}
-
-// ──────────────────────────────────────────────
 // Browser Login Popover
 // ──────────────────────────────────────────────
 
+/** Ad-hoc "open any URL in the Halo browser" utility. The app's declared login
+ * sites are deliberately not repeated here — Settings owns that list, and the
+ * login notice bar owns the alarm. */
 interface BrowserLoginPopoverProps {
-  entries: BrowserLoginEntry[]
-  onOpen: (url: string, label: string) => void
   onOpenCustomUrl: (url: string) => void
   t: (s: string, opts?: Record<string, unknown>) => string
 }
 
-function BrowserLoginPopover({ entries, onOpen, onOpenCustomUrl, t }: BrowserLoginPopoverProps) {
+function BrowserLoginPopover({ onOpenCustomUrl, t }: BrowserLoginPopoverProps) {
   const [customUrl, setCustomUrl] = useState('')
 
   const handleOpenCustom = () => {
@@ -352,24 +292,7 @@ function BrowserLoginPopover({ entries, onOpen, onOpenCustomUrl, t }: BrowserLog
         <span className="text-xs font-medium text-foreground">{t('Browser')}</span>
       </div>
 
-      {/* Preset login entries */}
-      {entries.length > 0 && (
-        <div className="py-1">
-          {entries.map(entry => (
-            <button
-              key={entry.url}
-              onClick={() => onOpen(entry.url, entry.label)}
-              className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left hover:bg-muted/60 transition-colors group"
-            >
-              <span className="text-sm text-foreground truncate">{entry.label}</span>
-              <ExternalLink className="w-3.5 h-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* Custom URL input */}
-      <div className={`px-3 py-2 ${entries.length > 0 ? 'border-t border-border' : ''}`}>
+      <div className="px-3 py-2">
         <div className="flex items-center gap-1.5">
           <input
             type="text"

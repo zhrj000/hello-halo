@@ -46,6 +46,8 @@ export interface WeixinIlinkInstanceCardProps {
   isExpanded: boolean
   onToggle: () => void
   onChange: (instance: ImChannelInstanceConfig) => void
+  /** Rebinding goes through main so its validation applies to both binding surfaces. */
+  onRebind: (appId: string) => void
   onDelete: () => void
 }
 
@@ -85,6 +87,7 @@ export function WeixinIlinkInstanceCard({
   isExpanded,
   onToggle,
   onChange,
+  onRebind,
   onDelete,
 }: WeixinIlinkInstanceCardProps) {
   const { t } = useTranslation()
@@ -202,8 +205,8 @@ export function WeixinIlinkInstanceCard({
   }, [stopPolling, instance])
 
   const handleAppChange = useCallback((appId: string) => {
-    onChange({ ...instance, appId })
-  }, [instance, onChange])
+    onRebind(appId)
+  }, [onRebind])
 
   // Resolve bound app name
   const boundApp = automationApps.find(a => a.id === instance.appId)

@@ -574,7 +574,15 @@ export async function installFromStore(
           .map(dep => ({ id: dep.id, files: dep.files }))
 
         if (bundledDeps.length > 0) {
-          bundledSkillSpecs = await adapter.fetchBundledSkills(registry, entry, bundledDeps)
+          const fetched = await adapter.fetchBundledSkills(registry, entry, bundledDeps)
+          // Distinct from 'store': the user never chose this skill independently —
+          // it exists because specWithStore declared it as a dependency.
+          bundledSkillSpecs = new Map(
+            Array.from(fetched, ([id, skillSpec]) => [id, {
+              ...skillSpec,
+              store: { ...(skillSpec.store ?? {}), install_source: 'bundled' as const },
+            }])
+          )
         }
       }
 
@@ -1424,6 +1432,7 @@ function withInstallStoreMetadata(spec: AppSpec, slug: string, registryId: strin
       ...(spec.store ?? {}),
       slug: spec.store?.slug ?? slug,
       registry_id: registryId,
+      install_source: spec.store?.install_source ?? 'store',
     },
   }
 }

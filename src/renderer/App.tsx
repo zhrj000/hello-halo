@@ -31,7 +31,7 @@ import { UpdateNotification } from './components/updater/UpdateNotification'
 import { NotificationToast } from './components/notification/NotificationToast'
 import { CredentialAlertBanner } from './components/settings/CredentialAlertBanner'
 import { NavRail } from './components/layout/NavRail'
-import { HeaderShell } from './components/layout/Header'
+import { HeaderShell, usePlatform } from './components/layout/Header'
 import { TaskPanel } from './components/layout/TaskPanel'
 import { useTaskPanelStore } from './stores/taskPanel.store'
 import { useNotificationStore } from './stores/notification.store'
@@ -54,10 +54,11 @@ const SettingsPage = lazy(() => import('./pages/SettingsPage').then(m => ({ defa
 const AppsPage = lazy(() => import('./pages/AppsPage').then(m => ({ default: m.AppsPage })))
 const TlonPage = lazy(() => import('./pages/TlonPage').then(m => ({ default: m.TlonPage })))
 const StorePage = lazy(() => import('./pages/StorePage').then(m => ({ default: m.StorePage })))
+const SpacesPage = lazy(() => import('./pages/SpacesPage').then(m => ({ default: m.SpacesPage })))
 
 // Views that render inside the persistent shell (rail visible). Pre-app
 // screens (splash/setup/server connect/...) render full-bleed without it.
-const RAIL_VIEWS: AppView[] = ['space', 'settings', 'apps', 'tlon', 'store']
+const RAIL_VIEWS: AppView[] = ['space', 'settings', 'apps', 'tlon', 'store', 'spaces']
 
 // Page loading fallback - minimal spinner that matches app style
 function PageLoader() {
@@ -71,10 +72,24 @@ function PageLoader() {
   )
 }
 
-// Theme colors for titleBarOverlay
-const THEME_COLORS = {
-  light: { color: '#ffffff', symbolColor: '#1a1a1a' },
-  dark: { color: '#0a0a0a', symbolColor: '#ffffff' }
+/**
+ * Resolves an HSL CSS variable (e.g. "220 20% 6%", the format every color
+ * token in globals.css uses) to a hex string. Electron's titleBarOverlay
+ * (Windows/Linux) needs a literal opaque color — it can't read CSS
+ * variables from the main process — so this reads the same `--background`/
+ * `--foreground` the header itself renders with, instead of a hand-picked
+ * hex that can silently drift from the actual token values.
+ */
+function cssHslVarToHex(varName: string): string {
+  const raw = getComputedStyle(document.documentElement).getPropertyValue(varName).trim()
+  const [h, s, l] = raw.split(/\s+/).map(v => parseFloat(v))
+  const a = (s / 100) * Math.min(l / 100, 1 - l / 100)
+  const channel = (n: number) => {
+    const k = (n + h / 30) % 12
+    const v = l / 100 - a * Math.max(-1, Math.min(k - 3, 9 - k, 1))
+    return Math.round(255 * v).toString(16).padStart(2, '0')
+  }
+  return `#${channel(0)}${channel(8)}${channel(4)}`
 }
 
 // Apply theme to document and sync to localStorage (for anti-flash on reload)
@@ -95,17 +110,28 @@ function applyTheme(theme: 'light' | 'dark' | 'system') {
     root.classList.toggle('light', theme === 'light')
   }
 
-  // Update titleBarOverlay colors (Windows/Linux only)
-  const colors = isDark ? THEME_COLORS.dark : THEME_COLORS.light
-  api.setTitleBarOverlay(colors).catch(() => {
+  // Update titleBarOverlay colors (Windows/Linux only) — read back the
+  // header's own tokens now that .light was just toggled above, so the
+  // overlay matches the header exactly in both themes.
+  api.setTitleBarOverlay({
+    color: cssHslVarToHex('--background'),
+    symbolColor: cssHslVarToHex('--foreground')
+  }).catch(() => {
     // Ignore errors - may not be supported on current platform
   })
 }
+
+// The traffic-light button group's real height isn't documented or
+// queryable — 28px turned out too tight to fit it with any breathing room
+// top and bottom (see main/index.ts trafficLightPosition), so this is a
+// looser, empirically-adjusted value rather than a tightly computed one.
+const MAC_TRAFFIC_LIGHT_CLEARANCE_PX = 30
 
 export default function App() {
   const { t } = useTranslation()
   const { view, config, initialize, setMcpStatus, navigate, enterApp, setConfig, completeDeferredGitBashCheck } = useAppStore()
   const isTaskPanelOpen = useTaskPanelStore(s => s.isOpen)
+  const platform = usePlatform()
   const {
     handleAgentMessage,
     handleAgentToolCall,
@@ -707,6 +733,17 @@ export default function App() {
     }
   }, [setInitialAppId, navigate])
 
+  // Task panel bookkeeping: another client (remote web, or this one) kept/
+  // removed/read an item, or the server's expiry sweep ran. Resync rather
+  // than trust any payload, since the event carries no data (see
+  // platform/task-state/service.ts's broadcast()).
+  useEffect(() => {
+    const unsubTaskState = api.onTaskStateChanged(() => {
+      useChatStore.getState().syncPersistedTaskState()
+    })
+    return () => unsubTaskState()
+  }, [])
+
   // Register Tlon (knowledge base) real-time event listeners.
   // Uses the imported onEvent() transport directly (not api.onEvent) so the
   // channel mapping in transport.ts methodMap is honored. Progress events
@@ -939,6 +976,15 @@ export default function App() {
     }
   }
 
+  // macOS traffic lights (trafficLightPosition in main/index.ts) sit above
+  // whatever renders at the window's top-left corner. Rather than widening
+  // NavRail itself to clear them (which shifts where the Header begins and
+  // stops the rail from matching the prototype's plain 56px width), a single
+  // full-width strip pinned above the whole NavRail+Header row reserves just
+  // enough height for the lights, in normal flow — NavRail and Header both
+  // start immediately below it, so nothing needs its own per-column clearance.
+  const isMacElectron = isElectron() && platform.isMac
+
   // Show reconnection banner for remote/Capacitor modes
   const showReconnectBanner = (api.isRemoteMode() || api.isCapacitorMode())
     && wsState !== 'connected'
@@ -1000,13 +1046,33 @@ export default function App() {
             <StorePage />
           </Suspense>
         )
+      case 'spaces':
+        return (
+          <Suspense fallback={<PageLoader />}>
+            <SpacesPage />
+          </Suspense>
+        )
       default:
         return <SplashPage />
     }
   }
 
   return (
-    <div className="h-full w-full overflow-hidden bg-background">
+    <div className="h-full w-full overflow-hidden bg-background flex flex-col shadow-[inset_0_0_0_1px_var(--border)]">
+      {/* Own visible edge, independent of the OS compositor's window shadow —
+          some remote-desktop/VDI protocols suppress that shadow entirely,
+          leaving the window looking borderless. */}
+      {/* macOS traffic-light clearance — a single full-width strip above the
+          whole NavRail+Header row, instead of widening NavRail itself (which
+          would shift where Header begins and stop the rail matching the
+          prototype's plain 56px width). NavRail's own top spacer no longer
+          needs any platform-specific sizing because of this. */}
+      {isMacElectron && (
+        <div
+          className="w-full flex-shrink-0 border-b border-border drag-region"
+          style={{ height: `calc(${MAC_TRAFFIC_LIGHT_CLEARANCE_PX}px / var(--display-scale, 1))` }}
+        />
+      )}
       {/* WebSocket reconnection banner */}
       {showReconnectBanner && (
         <div className="fixed top-0 inset-x-0 z-50 flex items-center justify-center gap-2 py-1.5 bg-halo-warning/90 text-sm font-medium animate-slide-down safe-area-top"
@@ -1016,7 +1082,7 @@ export default function App() {
           <span className="text-foreground">{t('Reconnecting...')}</span>
         </div>
       )}
-      <div className="h-full w-full flex overflow-hidden">
+      <div className="flex-1 min-h-0 w-full flex overflow-hidden">
         {RAIL_VIEWS.includes(view) ? (
           <>
             <NavRail />

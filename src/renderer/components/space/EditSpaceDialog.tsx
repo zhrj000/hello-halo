@@ -9,9 +9,9 @@
 import { useState } from 'react'
 import { useTranslation } from '../../i18n'
 import { useSpaceStore } from '../../stores/space.store'
-import { SpaceIcon } from '../icons/ToolIcons'
-import { SPACE_ICONS, DEFAULT_SPACE_ICON } from '../../types'
-import type { Space, SpaceIconId } from '../../types'
+import { SpaceColorSwatch } from './SpaceColorSwatch'
+import { type SpaceColorId } from './spaceAvatarUtils'
+import type { Space } from '../../types'
 
 interface EditSpaceDialogProps {
   space: Space
@@ -24,11 +24,11 @@ export function EditSpaceDialog({ space, onClose, onSaved }: EditSpaceDialogProp
   const updateSpace = useSpaceStore(state => state.updateSpace)
 
   const [name, setName] = useState(space.name)
-  const [icon, setIcon] = useState<SpaceIconId>((space.icon as SpaceIconId) || DEFAULT_SPACE_ICON)
+  const [color, setColor] = useState<SpaceColorId>((space.color as SpaceColorId) || 'primary')
 
   const handleSave = async () => {
     if (!name.trim()) return
-    await updateSpace(space.id, { name: name.trim(), icon })
+    await updateSpace(space.id, { name: name.trim(), color })
     onSaved()
   }
 
@@ -38,50 +38,36 @@ export function EditSpaceDialog({ space, onClose, onSaved }: EditSpaceDialogProp
         className="bg-card border border-border rounded-xl p-6 w-full max-w-md animate-fade-in"
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <h2 className="text-lg font-medium mb-4">{t('Edit Space')}</h2>
+        <h2 className="text-lg font-medium mb-4">{t('Edit Workspace')}</h2>
 
         <div className="mb-4">
-          <label className="block text-sm text-muted-foreground mb-2">{t('Space Name')}</label>
+          <label className="block text-sm text-muted-foreground mb-2">{t('Name')}</label>
           <input
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder={t('My Project')}
+            placeholder={t('e.g. Payment Refactor')}
             className="w-full px-4 py-2 bg-input rounded-lg border border-border focus:border-primary focus:outline-none transition-colors"
             autoFocus
           />
         </div>
 
         <div className="mb-6">
-          <label className="block text-sm text-muted-foreground mb-2">{t('Icon')}</label>
-          <div className="flex flex-wrap gap-2">
-            {SPACE_ICONS.map((iconId) => (
-              <button
-                key={iconId}
-                onClick={() => setIcon(iconId)}
-                className={`w-10 h-10 rounded-lg flex items-center justify-center transition-all ${
-                  icon === iconId
-                    ? 'bg-primary/20 border-2 border-primary'
-                    : 'bg-secondary hover:bg-secondary/80'
-                }`}
-              >
-                <SpaceIcon iconId={iconId} size={20} />
-              </button>
-            ))}
-          </div>
+          <label className="block text-sm text-muted-foreground mb-2">{t('Icon Color')}</label>
+          <SpaceColorSwatch value={color} onChange={setColor} />
         </div>
 
-        <div className="flex justify-end gap-3">
+        <div className="flex justify-end gap-2.5">
           <button
             onClick={onClose}
-            className="px-4 py-2 text-muted-foreground hover:bg-secondary rounded-lg transition-colors"
+            className="h-9 px-4 rounded-sm border border-border bg-secondary text-foreground text-[13px] font-medium hover:bg-surface-hover transition-colors ease-halo"
           >
             {t('Cancel')}
           </button>
           <button
             onClick={handleSave}
             disabled={!name.trim()}
-            className="px-4 py-2 bg-primary text-primary-foreground rounded-lg btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
+            className="h-9 px-4 rounded-sm border border-primary bg-primary text-primary-foreground text-[13px] font-medium hover:bg-primary-hover transition-colors ease-halo disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {t('Save')}
           </button>

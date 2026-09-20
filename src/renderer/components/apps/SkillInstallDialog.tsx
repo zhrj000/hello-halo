@@ -28,6 +28,7 @@ import { useAppsStore } from '../../stores/apps.store'
 import { useSpaceStore } from '../../stores/space.store'
 import { useTranslation } from '../../i18n'
 import type { SkillSpec } from '../../../shared/apps/spec-types'
+import { GLOBAL_SCOPE } from '../../../shared/apps/scope'
 import {
   toSlug,
   sanitizeCommandName,
@@ -250,10 +251,10 @@ export function SkillInstallDialog({ onClose }: SkillInstallDialogProps) {
   const haloSpace = useSpaceStore(state => state.haloSpace)
   const spaces = useSpaceStore(state => state.spaces)
 
-  // All spaces, plus a sentinel '' = global
+  // All spaces, plus the shared global sentinel (spaceId = null)
   const allSpaces = useMemo(() => {
     const result: Array<{ id: string; name: string }> = [
-      { id: '', name: t('Global (all spaces)') },
+      { id: GLOBAL_SCOPE, name: t('Global (all workspaces)') },
     ]
     if (haloSpace) result.push({ id: haloSpace.id, name: haloSpace.name })
     result.push(...spaces.map(s => ({ id: s.id, name: s.name })))
@@ -261,7 +262,7 @@ export function SkillInstallDialog({ onClose }: SkillInstallDialogProps) {
   }, [haloSpace, spaces, t])
 
   // Default: current space if any, else global
-  const [selectedSpaceId, setSelectedSpaceId] = useState(currentSpace?.id ?? '')
+  const [selectedSpaceId, setSelectedSpaceId] = useState(currentSpace?.id ?? GLOBAL_SCOPE)
 
   // Mode
   const [mode, setMode] = useState<SkillMode>('visual')
@@ -412,7 +413,7 @@ export function SkillInstallDialog({ onClose }: SkillInstallDialogProps) {
         ...spec,
       }
 
-      const spaceId = selectedSpaceId || null
+      const spaceId = selectedSpaceId === GLOBAL_SCOPE ? null : selectedSpaceId
       const appId = await installApp(spaceId, fullSpec)
       if (appId) {
         await loadApps()
@@ -613,7 +614,7 @@ export function SkillInstallDialog({ onClose }: SkillInstallDialogProps) {
             </h3>
             {allSpaces.length <= 1 ? (
               <p className="text-sm text-foreground">
-                {allSpaces[0]?.name ?? t('No spaces available')}
+                {allSpaces[0]?.name ?? t('No workspaces available')}
               </p>
             ) : (
               <select

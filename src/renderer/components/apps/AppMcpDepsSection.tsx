@@ -33,7 +33,7 @@ import { useAppStore } from '../../stores/app.store'
 import { useAppsPageStore, tabForAppType } from '../../stores/apps-page.store'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { resolveSpecI18n } from '../../utils/spec-i18n'
-import { isSessionOnlyFailure } from '../../utils/mcpStatus'
+import { deriveMcpHealth, mcpHealthText, type McpHealth } from '../../utils/mcpStatus'
 import type { InstalledApp } from '../../../shared/apps/app-types'
 import { BUILTIN_MCP_SERVER_IDS } from '../../../shared/apps/builtin-mcp'
 import type { McpSpec, McpDependency } from '../../../shared/apps/spec-types'
@@ -47,16 +47,6 @@ interface AppMcpDepsSectionProps {
 }
 
 // ── Health resolution ────────────────────────────────────────────────────────
-
-type Health =
-  | 'connected'
-  | 'disabled'
-  | 'not-installed'
-  | 'failed'
-  | 'needs-login'
-  /** Configuration connects, but the last agent session could not use it. */
-  | 'session-stale'
-  | 'unprobed'
 
 interface ResolvedDep {
   /** Declared dependency spec id */
@@ -73,24 +63,10 @@ interface ResolvedDep {
   /** Live SDK/probe status entry, if any */
   sdkEntry?: McpServerStatus
   /** Shared MCP server's own availability/health (independent of `enabled`) */
-  health: Health
+  health: McpHealth
 }
 
-function resolveHealth(mcpApp: InstalledApp | null, sdkEntry?: McpServerStatus): Health {
-  if (!mcpApp) return 'not-installed'
-  if (mcpApp.status === 'paused') return 'disabled'
-  if (mcpApp.status === 'error') return 'failed'
-  if (mcpApp.status === 'needs_login') return 'needs-login'
-  if (sdkEntry) {
-    if (isSessionOnlyFailure(sdkEntry)) return 'session-stale'
-    if (sdkEntry.status === 'failed') return 'failed'
-    if (sdkEntry.status === 'needs-auth') return 'needs-login'
-    if (sdkEntry.status === 'connected') return 'connected'
-  }
-  return 'unprobed'
-}
-
-function healthDotClass(health: Health): string {
+function healthDotClass(health: McpHealth): string {
   switch (health) {
     case 'connected':    return 'bg-green-500'
     case 'failed':       return 'bg-red-500'
@@ -150,7 +126,7 @@ function AddDependencyMenu({
             ))
           ) : (
             <p className="px-3 py-2 text-muted-foreground">
-              {t('No other MCP servers installed in this space.')}
+              {t('No other MCP servers installed in this workspace.')}
             </p>
           )}
           <div className="my-1 border-t border-border/50" />
@@ -198,18 +174,7 @@ function DepRow({
   const serverUnavailable = health === 'disabled'
 
   // Server-side availability text — independent of the per-app enable switch.
-  // Empty for an installed-but-unprobed server (no news is good news).
-  const statusText = (() => {
-    switch (health) {
-      case 'connected':    return toolCount > 0 ? t('Connected · {{count}} tools', { count: toolCount }) : t('Connected')
-      case 'disabled':     return t('MCP server globally disabled')
-      case 'failed':       return t('Connection failed')
-      case 'needs-login':  return t('Needs login')
-      case 'session-stale':return t('Retrying on next message')
-      case 'not-installed':return t('Not installed')
-      default:             return ''
-    }
-  })()
+  const statusText = mcpHealthText(health, t, toolCount)
 
   async function handleToggle() {
     if (toggling) return
@@ -323,7 +288,7 @@ function DepRow({
             <div className="space-y-2">
               <p className="text-xs text-amber-600 dark:text-amber-400 flex items-start gap-1.5">
                 <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-px" />
-                {t('This dependency is declared but not installed in this space. Runs will be missing its tools until it is installed.')}
+                {t('This dependency is declared but not installed in this workspace. Runs will be missing its tools until it is installed.')}
               </p>
               <button
                 onClick={onInstall}
@@ -453,7 +418,7 @@ export function AppMcpDepsSection({ app, appId, onRequireRestart }: AppMcpDepsSe
         enabled: dep.enabled !== false,
         mcpApp,
         sdkEntry,
-        health: resolveHealth(mcpApp, sdkEntry),
+        health: deriveMcpHealth(mcpApp, sdkEntry),
       }
     }),
     [declaredMcps, effectiveMcpApps, mcpStatus]
@@ -531,7 +496,7 @@ export function AppMcpDepsSection({ app, appId, onRequireRestart }: AppMcpDepsSe
       {missingCount > 0 && (
         <p className="text-xs text-amber-500 flex items-center gap-1.5">
           <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
-          {t('{{count}} declared MCP dependency is not installed in this space.', { count: missingCount })}
+          {t('{{count}} declared MCP dependency is not installed in this workspace.', { count: missingCount })}
         </p>
       )}
 

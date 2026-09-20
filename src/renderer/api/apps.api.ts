@@ -111,6 +111,33 @@ export const appsApi = {
     return httpRequest('GET', `/api/apps/${appId}/runs/${runId}/session`)
   },
 
+  appGetRuns: async (appId: string, options?: { limit?: number; offset?: number }): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.appGetRuns({ appId, options })
+    }
+    const params = new URLSearchParams()
+    if (options?.limit) params.set('limit', String(options.limit))
+    if (options?.offset) params.set('offset', String(options.offset))
+    const qs = params.toString()
+    return httpRequest('GET', `/api/apps/${appId}/runs${qs ? '?' + qs : ''}`)
+  },
+
+  appGetRunStats: async (appId: string, runWindow?: number): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.appGetRunStats({ appId, window: runWindow })
+    }
+    const qs = runWindow ? `?window=${runWindow}` : ''
+    return httpRequest('GET', `/api/apps/${appId}/run-stats${qs}`)
+  },
+
+  appGetOverview: async (spaceId?: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.appGetOverview(spaceId ? { spaceId } : undefined)
+    }
+    const qs = spaceId ? `?spaceId=${encodeURIComponent(spaceId)}` : ''
+    return httpRequest('GET', `/api/apps/overview${qs}`)
+  },
+
   appRespondEscalation: async (appId: string, escalationId: string, response: { choice?: string; text?: string }): Promise<ApiResponse> => {
     if (isElectron()) {
       return window.halo.appRespondEscalation({

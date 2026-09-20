@@ -7,7 +7,7 @@
  * │ ┌──────────────────────────────────────────────────┐ │
  * │ │ Textarea                                         │ │
  * │ └──────────────────────────────────────────────────┘ │
- * │ [+] [⚛]─────────────────────────────────  [Send] │
+ * │ [+] [Knowledge] [Tools] [Thinking]────────  [Send] │
  * │      Bottom toolbar: always visible, expandable     │
  * └──────────────────────────────────────────────────────┘
  *
@@ -19,10 +19,11 @@
  * - Bottom toolbar for future extensibility
  */
 
-import { useState, useRef, useEffect, useMemo, KeyboardEvent, ClipboardEvent, DragEvent } from 'react'
-import { Plus, ImagePlus, Loader2, AlertCircle, Atom } from 'lucide-react'
+import { useState, useRef, useEffect, useMemo, useCallback, KeyboardEvent, ClipboardEvent, DragEvent } from 'react'
+import { Plus, ImagePlus, Loader2, AlertCircle, Lightbulb } from 'lucide-react'
 import { useAppStore } from '../../stores/app.store'
 import { useChatStore } from '../../stores/chat.store'
+import { api } from '../../api'
 import { useOnboardingStore } from '../../stores/onboarding.store'
 import { getOnboardingPrompt } from '../onboarding/onboardingData'
 import { ToolsetControls } from './ToolsetControls'
@@ -36,8 +37,9 @@ import { getCurrentSource, resolveModelVision } from '../../types'
 import { useTranslation } from '../../i18n'
 import { SlashCommandMenu, filterSlashCommands } from './SlashCommandMenu'
 import type { SlashCommandItem } from '../../types/slash-command'
+import { DigitalHumanSelector, type DigitalHumanSelectorConfig } from './DigitalHumanSelector'
 
-// ── @ mention helpers ──
+// ── #/@ mention helpers (R4.1: # = file reference, @ = recipient switch) ──
 
 interface MentionMatch {
   query: string
@@ -45,7 +47,26 @@ interface MentionMatch {
   end: number
 }
 
+/**
+ * File-reference trigger. Was "@" pre-R4.1; moved to "#" once "@" became the
+ * digital-human recipient trigger (IM/Copilot-style: @ = who, # = what file).
+ */
 function getMentionMatch(value: string, cursorPosition: number): MentionMatch | null {
+  const beforeCursor = value.slice(0, cursorPosition)
+  const match = beforeCursor.match(/(^|\s)#([^\s#]*)$/)
+  if (!match || match.index === undefined) return null
+  const start = match.index + match[1].length
+  return { query: match[2] || '', start, end: cursorPosition }
+}
+
+/**
+ * Digital-human recipient trigger (R4.1). Same shape as getMentionMatch but
+ * keyed on "@" — the two never match the same span since they're different
+ * characters, but are kept as separate functions/state rather than a shared
+ * generic to avoid coupling the file-reference and recipient-switch flows,
+ * which have unrelated selection semantics (insert text vs. switch link).
+ */
+function getAtMentionMatch(value: string, cursorPosition: number): MentionMatch | null {
   const beforeCursor = value.slice(0, cursorPosition)
   const match = beforeCursor.match(/(^|\s)@([^\s@]*)$/)
   if (!match || match.index === undefined) return null
@@ -104,11 +125,38 @@ interface InputAreaProps {
    * silently no-op here.
    */
   hideKnowledgeControls?: boolean
+  /**
+   * Drop the docked-input styling (top border, full-bleed background) for
+   * contexts where this renders as a standalone card instead of pinned to
+   * the bottom of a message list — e.g. the chat empty state's centered
+   * composer.
+   */
+  standalone?: boolean
+  /**
+   * Digital-human "recipient" dropdown (R4/D2), docked at the input's left
+   * edge. Only the main conversation board sets this — other InputArea
+   * consumers (digital-human chat itself, the run-detail inject box) omit it
+   * and the control simply doesn't render.
+   */
+  digitalHumanSelector?: DigitalHumanSelectorConfig
+  /**
+   * Enables per-conversation draft persistence (D9): unsent text is stashed
+   * in chat.store's in-memory composerDrafts map under this key and restored
+   * on mount, so switching the digital-human selector away and back doesn't
+   * lose what was typed. Callers MUST remount this component (`key={draftKey}`)
+   * when the key changes — drafts are read once, at mount, via lazy useState.
+   */
+  draftKey?: string
 }
 
 // Image constraints
 const MAX_IMAGE_SIZE = 20 * 1024 * 1024  // 20MB max per image (before compression)
 const MAX_IMAGES = 10  // Max images per message
+
+// Number of actions offered by the attachment control. With only one
+// (image), the toolbar shows it directly instead of hiding it behind a
+// "+" popover — bump this when a second attach action is added.
+const ATTACH_ACTION_COUNT: number = 1
 
 // Error message type
 interface ImageError {
@@ -116,7 +164,7 @@ interface ImageError {
   message: string
 }
 
-export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder, isCompact = false, slashCommands = [], mentionArtifacts = [], hideToolsetControls = false, hideKnowledgeControls = false }: InputAreaProps) {
+export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder, isCompact = false, slashCommands = [], mentionArtifacts = [], hideToolsetControls = false, hideKnowledgeControls = false, standalone = false, digitalHumanSelector, draftKey }: InputAreaProps) {
   const { t } = useTranslation()
   const sendKeyMode = useAppStore(state => state.config?.chat?.sendKeyMode ?? 'enter')
 
@@ -132,7 +180,17 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
     if (!source) return true
     return resolveModelVision(source, source.model)
   }, [aiSources])
-  const [content, setContent] = useState('')
+  const [content, setContentState] = useState(() => draftKey ? useChatStore.getState().getComposerDraft(draftKey) : '')
+  // Persists to chat.store's in-memory draft map on every change (D9). The
+  // caller remounts this component when draftKey changes (see prop doc), so
+  // this never needs to react to draftKey changing under it.
+  const setContent = useCallback((value: string | ((prev: string) => string)) => {
+    setContentState(prev => {
+      const next = typeof value === 'function' ? (value as (prev: string) => string)(prev) : value
+      if (draftKey) useChatStore.getState().setComposerDraft(draftKey, next)
+      return next
+    })
+  }, [draftKey])
   const [isFocused, setIsFocused] = useState(false)
   const [images, setImages] = useState<ImageAttachment[]>([])
   const [isDragOver, setIsDragOver] = useState(false)
@@ -143,30 +201,62 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
   // Slash-command autocomplete
   const [slashMenuOpen, setSlashMenuOpen] = useState(false)
   const [slashSelectedIndex, setSlashSelectedIndex] = useState(0)
+  // Set only by the pendingComposerInput prefill path (see its effect below)
+  // to show a confirmation menu independent of the session's live command
+  // list. Cleared the moment the user actually types, falling back to the
+  // normal session-derived filtering.
+  const [slashPreviewOverride, setSlashPreviewOverride] = useState<SlashCommandItem | null>(null)
   // @ mention autocomplete (P1 fix: track cursor as state for correct useMemo deps)
   const [mentionMenuOpen, setMentionMenuOpen] = useState(false)
   const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0)
+  // @ recipient-switch autocomplete (R4.1) — only meaningful when
+  // digitalHumanSelector is provided; otherwise these stay permanently false.
+  const [dhMentionMenuOpen, setDhMentionMenuOpen] = useState(false)
+  const [dhMentionSelectedIndex, setDhMentionSelectedIndex] = useState(0)
   const [cursorPos, setCursorPos] = useState(0)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Consume a composer prefill requested for this space (e.g. a skill's slash
-  // command from the store's "Use" action): fill the box once, focus, cursor to
-  // end. Cleared immediately so it never re-fires or leaks into another space.
+  // command from the store's "Use" action, or SkillsTab's row click): fill
+  // the box once, focus, cursor to end. Cleared immediately so it never
+  // re-fires or leaks into another space.
   const pendingComposerInput = useChatStore(state => state.pendingComposerInput)
   const currentSpaceId = useChatStore(state => state.currentSpaceId)
   useEffect(() => {
     if (!pendingComposerInput || pendingComposerInput.spaceId !== currentSpaceId) return
     const text = pendingComposerInput.text
+    const slashPreview = pendingComposerInput.slashPreview
     useChatStore.setState({ pendingComposerInput: null })
     setContent(text)
+    // A prefilled slash command (skill "use" actions always fill one) opens
+    // the same autocomplete menu the user would see typing it — it's the
+    // only surface that shows the skill's argument hint, and it doubles as
+    // a quick confirm of what actually got filled. The live-typing handler
+    // below gates on "no space yet" to avoid opening while typing plain
+    // text that starts with '/'; that concern doesn't apply here since this
+    // path only ever fills a real, known command.
+    if (text.startsWith('/')) {
+      setSlashMenuOpen(true)
+      setSlashSelectedIndex(0)
+      // Show it even if the current session hasn't announced this command
+      // (new empty conversation, or a skill the SDK didn't load for this
+      // session) — see slashPreviewOverride's declaration for why that's safe.
+      setSlashPreviewOverride(slashPreview ? {
+        id: `preview-${slashPreview.command}`,
+        command: slashPreview.command,
+        label: slashPreview.label,
+        description: slashPreview.description,
+        category: 'skill',
+      } : null)
+    }
     requestAnimationFrame(() => {
       const ta = textareaRef.current
       if (!ta) return
       ta.focus()
       ta.setSelectionRange(ta.value.length, ta.value.length)
       ta.style.height = 'auto'
-      ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`
+      ta.style.height = `${Math.min(ta.scrollHeight, 180)}px`
     })
   }, [pendingComposerInput, currentSpaceId])
 
@@ -350,7 +440,7 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
     const textarea = textareaRef.current
     if (textarea) {
       textarea.style.height = 'auto'
-      textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`
+      textarea.style.height = `${Math.min(textarea.scrollHeight, 180)}px`
     }
   }, [displayContent])
 
@@ -375,9 +465,13 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
 
   // Pre-filtered, pre-sorted list — single source of truth for rendering and keyboard nav.
   // Only computed when the menu is open; returns [] otherwise (zero cost when closed).
+  // A prefill override bypasses the session-derived list entirely (see its
+  // declaration above for why).
   const filteredSlashCommands = useMemo(
-    () => (slashMenuOpen ? filterSlashCommands(slashCommands, slashFilter) : []),
-    [slashCommands, slashFilter, slashMenuOpen]
+    () => slashPreviewOverride
+      ? [slashPreviewOverride]
+      : (slashMenuOpen ? filterSlashCommands(slashCommands, slashFilter) : []),
+    [slashCommands, slashFilter, slashMenuOpen, slashPreviewOverride]
   )
 
   // @ mention match — depends on both content and cursor position (P1 fix)
@@ -414,6 +508,21 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
       .slice(0, 50)
   }, [mentionArtifacts, mentionMatch, mentionMenuOpen])
 
+  // @ recipient-switch match + filtered option list (R4.1). Digital humans
+  // only — @ is "who do I hand this to", not a toggle back to normal chat;
+  // switching back to Halo is the selector's own "Halo" entry or clearing
+  // the current selection, not an @ target.
+  const dhMentionMatch = useMemo(
+    () => getAtMentionMatch(content, cursorPos),
+    [content, cursorPos]
+  )
+  const dhMentionOptions = useMemo(() => {
+    if (!dhMentionMenuOpen || !digitalHumanSelector) return []
+    const query = dhMentionMatch?.query.trim().toLowerCase() || ''
+    const options = digitalHumanSelector.options.map(o => ({ appId: o.appId, name: o.name }))
+    return query ? options.filter(o => o.name.toLowerCase().includes(query)) : options
+  }, [dhMentionMenuOpen, digitalHumanSelector, dhMentionMatch])
+
   const handleSlashClose = () => {
     setSlashMenuOpen(false)
     setSlashSelectedIndex(0)
@@ -422,6 +531,57 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
   const handleMentionClose = () => {
     setMentionMenuOpen(false)
     setMentionSelectedIndex(0)
+  }
+
+  const handleDhMentionClose = () => {
+    setDhMentionMenuOpen(false)
+    setDhMentionSelectedIndex(0)
+  }
+
+  /**
+   * Switch recipient via @ (R4.1/D11): removes the "@query" span entirely —
+   * no residual text — since the selection's only effect is switching which
+   * link the input points at (the chip/selector shows the result), not
+   * inserting a reference the way # does.
+   *
+   * @ always starts a fresh session with the digital human (D5 revision —
+   * @ing is "start talking to X", distinct from the dropdown's "open X's
+   * existing conversation"), so a digital human can accumulate several
+   * sessions the way a normal recipient can have several threads.
+   */
+  const selectDhMention = async (appId: string) => {
+    const currentCursor = textareaRef.current?.selectionStart ?? content.length
+    const match = getAtMentionMatch(content, currentCursor)
+    if (!match) return
+
+    const suffix = content.slice(match.end)
+    const prefix = content.slice(0, match.start)
+    // Drop a single leading space the trigger regex captured, so removing
+    // "@query" doesn't leave a double space behind.
+    const nextContent = `${prefix}${suffix}`
+    const nextCursor = prefix.length
+
+    setContent(nextContent)
+    handleDhMentionClose()
+
+    try {
+      const res = await api.appSessionCreate(appId)
+      if (res.success && res.data) {
+        digitalHumanSelector?.onChange(appId, res.data.conversationId)
+      } else {
+        console.error('[InputArea] Failed to create digital-human session:', res.error)
+      }
+    } catch (err) {
+      console.error('[InputArea] Create digital-human session error:', err)
+    }
+
+    requestAnimationFrame(() => {
+      if (textareaRef.current) {
+        textareaRef.current.focus()
+        textareaRef.current.setSelectionRange(nextCursor, nextCursor)
+        setCursorPos(nextCursor)
+      }
+    })
   }
 
   const insertMention = (relativePath: string) => {
@@ -456,7 +616,7 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
     requestAnimationFrame(() => {
       if (textareaRef.current) {
         textareaRef.current.style.height = 'auto'
-        textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`
+        textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 180)}px`
         textareaRef.current.focus()
         // Place cursor at the end
         const len = textareaRef.current.value.length
@@ -474,6 +634,7 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
       if (textToSend && onInject) {
         onInject(textToSend)
         setContent('')
+        if (draftKey) useChatStore.getState().clearComposerDraft(draftKey)
         handleMentionClose()
         handleSlashClose()
         if (textareaRef.current) textareaRef.current.style.height = 'auto'
@@ -487,6 +648,7 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
 
       if (!isOnboardingSendStep) {
         setContent('')
+        if (draftKey) useChatStore.getState().clearComposerDraft(draftKey)
         setImages([])  // Clear images after send
         handleMentionClose()
         handleSlashClose()
@@ -532,6 +694,32 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
       if (e.key === 'Escape') {
         e.preventDefault()
         handleMentionClose()
+        return
+      }
+    }
+
+    // ── @ recipient-switch menu navigation (R4.1) ───────────────────────────────
+    if (dhMentionMenuOpen && dhMentionOptions.length > 0) {
+      const dLen = dhMentionOptions.length
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setDhMentionSelectedIndex(i => (i + 1) % dLen)
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setDhMentionSelectedIndex(i => (i - 1 + dLen) % dLen)
+        return
+      }
+      if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
+        e.preventDefault()
+        const selected = dhMentionOptions[dhMentionSelectedIndex]
+        if (selected) void selectDhMention(selected.appId)
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        handleDhMentionClose()
         return
       }
     }
@@ -610,11 +798,11 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
 
   return (
     <div className={`
-      border-t border-border/50 bg-background
+      ${standalone ? '' : isCompact ? 'border-t border-border/50 bg-background' : 'bg-gradient-to-b from-transparent to-background'}
       transition-[padding] duration-300 ease-out
-      ${isCompact ? 'px-3 py-2' : 'px-4 py-3'}
+      ${standalone ? '' : isCompact ? 'px-3 py-2' : 'pt-3 px-6 pb-[18px]'}
     `}>
-      <div className={isCompact ? '' : 'max-w-3xl mx-auto'}>
+      <div className={standalone ? '' : isCompact ? '' : 'max-w-[720px] mx-auto'}>
         {/* Error toast notification */}
         {imageError && (
           <div className="mb-2 p-3 rounded-xl bg-destructive/10 border border-destructive/20
@@ -638,14 +826,15 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
             Sibling above the input card; the input box itself is untouched. */}
         <LiveSessionsHeader />
 
-        {/* Input container */}
+        {/* Input container — radius kept at the prototype's literal values
+            (its own core visual feature, not on the 8/10/12/16 scale):
+            22px centered/standalone, 18px once docked at the bottom. */}
         <div
           className={`
-            relative flex flex-col rounded-2xl transition-all duration-200
-            ${isFocused
-              ? 'ring-1 ring-primary/30 bg-card shadow-sm'
-              : 'bg-secondary/50 hover:bg-secondary/70'
-            }
+            relative flex flex-col border bg-card shadow-soft
+            transition-colors ease-halo
+            ${standalone ? 'rounded-[22px]' : 'rounded-[18px]'}
+            ${isFocused ? 'border-primary ring-[3px] ring-primary/[0.12]' : 'border-border'}
             ${isDragOver ? 'ring-2 ring-primary/50 bg-primary/5' : ''}
           `}
           onDragOver={handleDragOver}
@@ -692,6 +881,46 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
               </div>
             </div>
           )}
+          {/* @ recipient-switch autocomplete menu (R4.1). Stays open even with
+              zero options — a silently empty "@" is indistinguishable from
+              the keystroke not registering, so an empty workspace still gets
+              a popup explaining why there's nothing to pick. */}
+          {dhMentionMenuOpen && digitalHumanSelector && (
+            <div className="absolute bottom-full left-0 mb-2 w-56 max-w-md bg-popover border border-border rounded-xl shadow-lg z-30 overflow-hidden">
+              {dhMentionOptions.length > 0 ? (
+                <>
+                  <div className="max-h-[336px] overflow-y-auto py-1">
+                    {dhMentionOptions.map((option, index) => {
+                      const isSelected = index === dhMentionSelectedIndex
+                      return (
+                        <button
+                          key={option.appId}
+                          onMouseDown={(e) => {
+                            e.preventDefault()
+                            void selectDhMention(option.appId)
+                          }}
+                          className={`w-full flex items-center gap-2 text-left min-h-[36px] px-3 border-l-2 ${isSelected ? 'bg-primary/10 border-primary' : 'border-transparent hover:bg-muted/50'}`}
+                        >
+                          <span className="text-sm truncate flex-1 min-w-0">{option.name}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <div className="border-t border-border/40 px-3 py-1.5 flex items-center gap-3 text-[10px] text-muted-foreground/40 select-none">
+                    <span>↑↓ {t('navigate')}</span>
+                    <span>↵ {t('select')}</span>
+                    <span>Esc {t('close')}</span>
+                  </div>
+                </>
+              ) : (
+                <div className="px-3 py-4 text-xs text-muted-foreground text-center">
+                  {digitalHumanSelector.options.length === 0
+                    ? t('This workspace has no digital humans yet')
+                    : t('No matching results found')}
+                </div>
+              )}
+            </div>
+          )}
           {/* Image preview area */}
           {hasImages && (
             <>
@@ -728,7 +957,7 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
           )}
 
           {/* Textarea area */}
-          <div className="px-3 pt-3 pb-1">
+          <div className="px-4 pt-3.5">
             <textarea
               ref={textareaRef}
               value={displayContent}
@@ -736,6 +965,9 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
                 if (isOnboardingSendStep) return
                 const val = e.target.value
                 setContent(val)
+                // Real typing always falls back to the session's live command
+                // list — a stale prefill preview shouldn't keep overriding it.
+                setSlashPreviewOverride(null)
                 // Open slash-command menu only when the input is a plausible command prefix.
                 // Short-circuits before any filter computation via maxCommandLen:
                 //   • starts with "/"
@@ -752,19 +984,34 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
                   setSlashMenuOpen(true)
                   setSlashSelectedIndex(0)
                   setMentionMenuOpen(false)
+                  setDhMentionMenuOpen(false)
                 } else {
                   setSlashMenuOpen(false)
                 }
 
-                // @ mention detection (P1 fix: track cursor position as state)
+                // # file-reference detection (P1 fix: track cursor position as state)
                 const nextCursor = e.target.selectionStart ?? val.length
                 setCursorPos(nextCursor)
                 const nextMentionMatch = getMentionMatch(val, nextCursor)
-                if (nextMentionMatch && mentionArtifacts.length > 0) {
+                // D11: only opens once a character follows "#" — an empty query
+                // would otherwise fire on every Markdown heading (# ) keystroke.
+                if (nextMentionMatch && nextMentionMatch.query.length > 0 && mentionArtifacts.length > 0) {
                   setMentionMenuOpen(true)
                   setMentionSelectedIndex(0)
                 } else {
                   setMentionMenuOpen(false)
+                }
+
+                // @ recipient-switch detection (R4.1) — no query-length gate
+                // ("#" heading collision doesn't apply to "@"); locked (R5.1:
+                // generating or queued) suppresses it entirely rather than
+                // showing a menu whose selection would be rejected anyway.
+                const nextDhMentionMatch = getAtMentionMatch(val, nextCursor)
+                if (nextDhMentionMatch && digitalHumanSelector && !digitalHumanSelector.locked) {
+                  setDhMentionMenuOpen(true)
+                  setDhMentionSelectedIndex(0)
+                } else {
+                  setDhMentionMenuOpen(false)
                 }
               }}
               onSelect={(e) => setCursorPos((e.target as HTMLTextAreaElement).selectionStart ?? 0)}
@@ -772,14 +1019,22 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
               onPaste={handlePaste}
               onFocus={() => setIsFocused(true)}
               onBlur={() => setIsFocused(false)}
-              placeholder={placeholder || t('Type a message, let Halo help you...')}
+              // No greeting lead-in here — the full-takeover empty state
+              // already has "What do you want to do today?" as an h2 right
+              // above the composer; repeating it in the placeholder was pure
+              // redundancy the docked (post-first-message) state inherits
+              // the same placeholder for, since it's the same InputArea
+              // instance either way.
+              placeholder={placeholder || (digitalHumanSelector
+                ? t('@ to switch recipient, # to reference files, / for skills and commands')
+                : t('# to reference files, / for skills and commands'))}
               readOnly={isOnboardingSendStep}
               rows={1}
-              className={`w-full bg-transparent resize-none
-                focus:outline-none text-foreground placeholder:text-muted-foreground/50
-                disabled:cursor-not-allowed min-h-[24px]
+              className={`w-full bg-transparent resize-none text-[15px] leading-[1.5]
+                focus:outline-none text-foreground placeholder:text-subtle-foreground
+                disabled:cursor-not-allowed min-h-[26px]
                 ${isOnboardingSendStep ? 'cursor-default' : ''}`}
-              style={{ maxHeight: '200px' }}
+              style={{ maxHeight: '180px' }}
             />
           </div>
 
@@ -802,6 +1057,7 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
             visionEnabled={visionEnabled}
             hideToolsetControls={hideToolsetControls}
             hideKnowledgeControls={hideKnowledgeControls}
+            digitalHumanSelector={digitalHumanSelector}
           />
         </div>
       </div>
@@ -813,7 +1069,7 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
  * Input Toolbar - Bottom action bar
  * Extracted as a separate component for maintainability and future extensibility
  *
- * Layout: [+attachment] ──────────────────── [⚛ thinking] [send]
+ * Layout: [+attachment] [knowledge] [tools] [thinking] ──── [send]
  */
 interface InputToolbarProps {
   isGenerating: boolean
@@ -833,6 +1089,7 @@ interface InputToolbarProps {
   visionEnabled: boolean
   hideToolsetControls: boolean
   hideKnowledgeControls: boolean
+  digitalHumanSelector?: DigitalHumanSelectorConfig
 }
 
 function InputToolbar({
@@ -852,66 +1109,96 @@ function InputToolbar({
   sendKeyMode,
   visionEnabled,
   hideToolsetControls,
-  hideKnowledgeControls
+  hideKnowledgeControls,
+  digitalHumanSelector
 }: InputToolbarProps) {
   const { t } = useTranslation()
   return (
-    <div className="flex items-center justify-between gap-1 px-2 pb-2 pt-1">
-      {/* Left section: attachment + toolsets + thinking. Scrolls horizontally
-          on narrow widths so the fixed Send/Stop group is never pushed off. */}
-      <div className="flex items-center gap-1 min-w-0 overflow-x-auto scrollbar-none">
-        {/* Attachment menu */}
+    <div className="flex flex-nowrap items-center justify-between gap-1 px-4 pb-2.5 mt-2">
+      {/* Left section: recipient selector + attachment + toolsets + thinking.
+          Scrolls horizontally on narrow widths so the fixed Send/Stop group
+          is never pushed off. */}
+      <div className="flex flex-nowrap items-center gap-1 min-w-0 overflow-x-auto scrollbar-none">
+        {digitalHumanSelector && !isOnboarding && (
+          <DigitalHumanSelector {...digitalHumanSelector} />
+        )}
+
+        {/* Attachment — a single available action (image) shows directly as
+            its own icon button instead of hiding behind a "+" popover; the
+            popover form only earns its keep once a second action exists. */}
         {!isGenerating && !isOnboarding && (
-          <Popover
-            open={showAttachMenu}
-            onOpenChange={(open) => {
-              if (open && isProcessingImages) return
-              onAttachMenuChange(open)
-            }}
-          >
-            <PopoverTrigger
-              title={t('Add attachment')}
-              className={`w-8 h-8 shrink-0 items-center justify-center rounded-lg cursor-pointer
-                transition-all duration-150
-                ${showAttachMenu
-                  ? 'bg-primary/10 text-primary'
-                  : 'text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/50'
+          ATTACH_ACTION_COUNT === 1 ? (
+            <button
+              type="button"
+              onClick={onImageClick}
+              disabled={isProcessingImages || imageCount >= maxImages}
+              title={!visionEnabled ? t('Current model has no vision — images will be read via local OCR (text only)') : t('Add image')}
+              className={`w-8 h-8 shrink-0 flex items-center justify-center rounded-sm cursor-pointer
+                transition-colors ease-halo
+                ${imageCount > 0
+                  ? 'bg-primary/[0.12] text-accent-on-dark'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
                 }
-                ${isProcessingImages ? 'opacity-50 cursor-not-allowed' : ''}
+                ${(isProcessingImages || imageCount >= maxImages) ? 'opacity-50 cursor-not-allowed' : ''}
               `}
             >
-              <Plus size={18} className={`transition-transform duration-200 ${showAttachMenu ? 'rotate-45' : ''}`} />
-            </PopoverTrigger>
-
-            <PopoverContent side="top" align="start" sideOffset={8} className="py-1.5 rounded-xl min-w-[160px]">
-              <button
-                onClick={onImageClick}
-                disabled={imageCount >= maxImages}
-                className={`w-full px-3 py-2 flex items-center gap-3 text-sm
-                  transition-colors duration-150
-                  ${imageCount >= maxImages
-                    ? 'text-muted-foreground/40 cursor-not-allowed'
-                    : 'text-foreground hover:bg-muted/50'
+              <ImagePlus size={17} />
+            </button>
+          ) : (
+            <Popover
+              open={showAttachMenu}
+              onOpenChange={(open) => {
+                if (open && isProcessingImages) return
+                onAttachMenuChange(open)
+              }}
+            >
+              <PopoverTrigger
+                title={t('Add attachment')}
+                className={`w-8 h-8 shrink-0 items-center justify-center rounded-sm cursor-pointer
+                  transition-all duration-150
+                  ${showAttachMenu
+                    ? 'bg-primary/[0.12] text-accent-on-dark'
+                    : 'text-muted-foreground/60 hover:text-muted-foreground hover:bg-secondary'
                   }
+                  ${isProcessingImages ? 'opacity-50 cursor-not-allowed' : ''}
                 `}
-                title={!visionEnabled ? t('Current model has no vision — images will be read via local OCR (text only)') : undefined}
               >
-                <ImagePlus size={16} className="text-muted-foreground" />
-                <span>{t('Add image')}</span>
-                {!visionEnabled && imageCount === 0 && (
-                  <span className="ml-auto text-xs text-muted-foreground/60">
-                    {t('via OCR')}
-                  </span>
-                )}
-                {imageCount > 0 && (
-                  <span className="ml-auto text-xs text-muted-foreground">
-                    {imageCount}/{maxImages}
-                  </span>
-                )}
-              </button>
-            </PopoverContent>
-          </Popover>
+                <Plus size={17} className={`transition-transform duration-200 ${showAttachMenu ? 'rotate-45' : ''}`} />
+              </PopoverTrigger>
+
+              <PopoverContent side="top" align="start" sideOffset={8} className="py-1.5 rounded-xl min-w-[160px]">
+                <button
+                  onClick={onImageClick}
+                  disabled={imageCount >= maxImages}
+                  className={`w-full px-3 py-2 flex items-center gap-3 text-sm
+                    transition-colors duration-150
+                    ${imageCount >= maxImages
+                      ? 'text-muted-foreground/40 cursor-not-allowed'
+                      : 'text-foreground hover:bg-muted/50'
+                    }
+                  `}
+                  title={!visionEnabled ? t('Current model has no vision — images will be read via local OCR (text only)') : undefined}
+                >
+                  <ImagePlus size={16} className="text-muted-foreground" />
+                  <span>{t('Add image')}</span>
+                  {!visionEnabled && imageCount === 0 && (
+                    <span className="ml-auto text-xs text-muted-foreground/60">
+                      {t('via OCR')}
+                    </span>
+                  )}
+                  {imageCount > 0 && (
+                    <span className="ml-auto text-xs text-muted-foreground">
+                      {imageCount}/{maxImages}
+                    </span>
+                  )}
+                </button>
+              </PopoverContent>
+            </Popover>
+          )
         )}
+
+        {/* Knowledge base loader */}
+        {!isGenerating && !isOnboarding && !hideKnowledgeControls && <KnowledgeBaseButton />}
 
         {/* On-demand toolsets (catalog menu + activation pills) */}
         {!isGenerating && !isOnboarding && !hideToolsetControls && <ToolsetControls />}
@@ -920,31 +1207,28 @@ function InputToolbar({
         {!isGenerating && !isOnboarding && (
           <button
             onClick={onThinkingToggle}
-            className={`h-8 shrink-0 flex items-center gap-1.5 px-2.5 rounded-lg
-              transition-colors duration-200
+            className={`h-8 shrink-0 flex items-center gap-[5px] px-[9px] rounded-sm
+              transition-colors ease-halo
               ${thinkingEnabled
-                ? 'bg-primary/10 text-primary'
-                : 'text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/50'
+                ? 'bg-primary/[0.12] text-accent-on-dark'
+                : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
               }
             `}
             title={thinkingEnabled ? t('Disable Deep Thinking') : t('Enable Deep Thinking')}
           >
-            <Atom size={15} />
-            <span className="hidden sm:inline text-xs">{t('Deep Thinking')}</span>
+            <Lightbulb size={17} />
+            <span className="hidden sm:inline text-xs whitespace-nowrap">{t('Deep Thinking')}</span>
           </button>
         )}
-
-        {/* Knowledge base loader */}
-        {!isGenerating && !isOnboarding && !hideKnowledgeControls && <KnowledgeBaseButton />}
       </div>
 
       {/* Right section: Stop (when generating) + Send — fixed, never scrolls */}
-      <div className="flex items-center gap-1 shrink-0">
+      <div className="flex flex-nowrap items-center gap-1 shrink-0">
         {isGenerating && onStop && (
           <button
             onClick={onStop}
             className="w-8 h-8 flex items-center justify-center
-              bg-destructive/10 text-destructive rounded-lg
+              bg-destructive/10 text-destructive rounded-sm
               hover:bg-destructive/20 active:bg-destructive/30
               transition-all duration-150"
             title={t('Stop generation (Esc)')}
@@ -958,9 +1242,9 @@ function InputToolbar({
             onClick={onSend}
             disabled={!canSend}
             className={`
-              w-8 h-8 flex items-center justify-center rounded-lg transition-all duration-200
+              w-[34px] h-[34px] flex items-center justify-center rounded-full transition-all ease-halo
               ${canSend
-                ? 'bg-primary text-primary-foreground hover:bg-primary/90 active:scale-95'
+                ? 'bg-primary text-primary-foreground hover:bg-primary-hover hover:-translate-y-[1px] active:scale-95'
                 : 'bg-muted/50 text-muted-foreground/40 cursor-not-allowed'
               }
             `}
@@ -972,7 +1256,7 @@ function InputToolbar({
                   : (thinkingEnabled ? t('Send (Deep Thinking) — Enter') : t('Send — Enter'))
             }
           >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+            <svg className="w-[17px] h-[17px]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 10.5L12 3m0 0l7.5 7.5M12 3v18" />
             </svg>
           </button>

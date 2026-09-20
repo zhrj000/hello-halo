@@ -15,7 +15,6 @@
  */
 
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
 import { api } from '../api'
 import { useAppStore } from './app.store'
 import { getCurrentLanguage } from '../i18n'
@@ -81,12 +80,13 @@ function reportDetailView(detail: StoreAppDetail, availableUpdates: UpdateInfo[]
 // Types
 // ============================================
 
-export type AppsDetailViewType = 'activity-thread' | 'session-detail' | 'app-chat' | 'app-config' | 'mcp-status' | 'skill-info' | 'uninstalled-detail'
+export type AppsDetailViewType = 'app-overview' | 'activity-thread' | 'session-detail' | 'app-config' | 'mcp-status' | 'skill-info' | 'uninstalled-detail'
 
 export type AppsDetailView =
+  | { type: 'app-overview'; appId: string }
   | { type: 'activity-thread'; appId: string }
   | { type: 'session-detail'; appId: string; runId: string; sessionKey: string }
-  | { type: 'app-chat'; appId: string; spaceId: string }
+  | { type: 'bot-sessions'; appId: string; instanceId: string }
   | { type: 'app-config'; appId: string }
   | { type: 'mcp-status'; appId: string }
   | { type: 'skill-info'; appId: string }
@@ -119,9 +119,6 @@ export function tabForAppType(type: AppType): AppsPageTab {
   }
 }
 
-/** Which detail tab was last selected for automation apps (persisted to localStorage) */
-export type AutomationDetailTab = 'activity' | 'chat' | 'config'
-
 // ============================================
 // State Interface
 // ============================================
@@ -132,12 +129,22 @@ interface AppsPageState {
   /** Set externally (from badge/notification) before navigating to AppsPage */
   initialAppId: string | null
   showInstallDialog: boolean
+  /**
+   * Set by the task panel when a `waiting_user` digital-human item is
+   * clicked, so the activity thread can scroll to and highlight the
+   * specific EscalationCard instead of just landing on the feed's top.
+   * Consumed once (mirrors storeAutoInstall).
+   */
+  pendingActivityScrollId: string | null
+  /**
+   * Set by the Overview tab's capability-summary chips so the Settings tab
+   * can scroll to and briefly highlight the settings group the chip
+   * summarizes (mirrors pendingActivityScrollId). Consumed once.
+   */
+  pendingConfigScrollId: string | null
 
   // ── Tab State ──────────────────────────────
   currentTab: AppsPageTab
-  /** Remembers which automation detail tab the user last selected (persisted) */
-  lastAutomationTab: AutomationDetailTab
-
   // ── Store Tab State ────────────────────────
   storeApps: RegistryEntry[]
   storeLoading: boolean
@@ -171,11 +178,21 @@ interface AppsPageState {
   // Actions
   selectApp: (appId: string, appType?: string, spaceId?: string) => void
   clearSelection: () => void
+  openAppOverview: (appId: string) => void
   openActivityThread: (appId: string) => void
   openSessionDetail: (appId: string, runId: string, sessionKey: string) => void
-  openAppChat: (appId: string, spaceId: string) => void
+  /** Open the session browser (list + read-only chat) for one bound bot instance. */
+  openBotSessions: (appId: string, instanceId: string) => void
   openAppConfig: (appId: string) => void
   setInitialAppId: (appId: string | null) => void
+  /** Navigate to an app's activity thread and scroll to a specific entry once there. */
+  openActivityThreadAt: (appId: string, entryId: string) => void
+  /** Consume the pending scroll-to-entry intent (returns it once, then clears). */
+  consumePendingActivityScrollId: () => string | null
+  /** Navigate to an app's Settings tab and scroll to a specific group once there. */
+  openAppConfigAt: (appId: string, groupId: string) => void
+  /** Consume the pending scroll-to-group intent (returns it once, then clears). */
+  consumePendingConfigScrollId: () => string | null
   setShowInstallDialog: (show: boolean) => void
   toggleImPanel: () => void
   selectImSession: (session: ImSessionRecord | null) => void
@@ -219,17 +236,16 @@ interface AppsPageState {
 // Store
 // ============================================
 
-export const useAppsPageStore = create<AppsPageState>()(
-  persist(
-    (set, get) => ({
+export const useAppsPageStore = create<AppsPageState>()((set, get) => ({
   selectedAppId: null,
   detailView: null,
+  pendingActivityScrollId: null,
+  pendingConfigScrollId: null,
   initialAppId: null,
   showInstallDialog: false,
 
   // ── Tab State ──────────────────────────────
   currentTab: 'my-digital-humans',
-  lastAutomationTab: 'activity',
 
   // ── Store Tab State ────────────────────────
   storeApps: [],
@@ -258,33 +274,56 @@ export const useAppsPageStore = create<AppsPageState>()(
   imSessionsAppId: null,
 
   selectApp: (appId, appType, spaceId) => {
-    let detailView: AppsDetailView = { type: 'activity-thread', appId }
-    if (appType === 'mcp') detailView = { type: 'mcp-status', appId }
+    // Looked up here rather than trusted from the caller: every card wall
+    // computes `appType` from `app.spec.type`, which doesn't change on
+    // uninstall (only `app.status` does) — so a caller-supplied type can
+    // never actually route to 'uninstalled-detail' on its own, no matter
+    // what card wall it's clicked from.
+    const isUninstalled = appType === 'uninstalled'
+      || useAppsStore.getState().apps.find(a => a.id === appId)?.status === 'uninstalled'
+
+    let detailView: AppsDetailView = { type: 'app-overview', appId }
+    if (isUninstalled) detailView = { type: 'uninstalled-detail', appId }
+    else if (appType === 'mcp') detailView = { type: 'mcp-status', appId }
     else if (appType === 'skill') detailView = { type: 'skill-info', appId }
-    else if (appType === 'uninstalled') detailView = { type: 'uninstalled-detail', appId }
-    else {
-      // Automation apps: restore last selected tab
-      const tab = get().lastAutomationTab
-      if (tab === 'chat' && spaceId) detailView = { type: 'app-chat', appId, spaceId }
-      else if (tab === 'config') detailView = { type: 'app-config', appId }
-      // else default 'activity' → activity-thread (already set)
-    }
+    // Automation apps fall through to the 'app-overview' default set above.
     set({ selectedAppId: appId, detailView })
   },
 
   clearSelection: () => set({ selectedAppId: null, detailView: null }),
 
+  openAppOverview: (appId) =>
+    set({ selectedAppId: appId, detailView: { type: 'app-overview', appId } }),
+
   openActivityThread: (appId) =>
-    set({ selectedAppId: appId, detailView: { type: 'activity-thread', appId }, lastAutomationTab: 'activity' }),
+    set({ selectedAppId: appId, detailView: { type: 'activity-thread', appId } }),
+
+  openActivityThreadAt: (appId, entryId) =>
+    set({ selectedAppId: appId, detailView: { type: 'activity-thread', appId }, pendingActivityScrollId: entryId }),
+
+  consumePendingActivityScrollId: () => {
+    const id = get().pendingActivityScrollId
+    if (id) set({ pendingActivityScrollId: null })
+    return id
+  },
 
   openSessionDetail: (appId, runId, sessionKey) =>
     set({ selectedAppId: appId, detailView: { type: 'session-detail', appId, runId, sessionKey } }),
 
-  openAppChat: (appId, spaceId) =>
-    set({ selectedAppId: appId, detailView: { type: 'app-chat', appId, spaceId }, lastAutomationTab: 'chat' }),
+  openBotSessions: (appId, instanceId) =>
+    set({ selectedAppId: appId, detailView: { type: 'bot-sessions', appId, instanceId } }),
 
   openAppConfig: (appId) =>
-    set({ selectedAppId: appId, detailView: { type: 'app-config', appId }, lastAutomationTab: 'config' }),
+    set({ selectedAppId: appId, detailView: { type: 'app-config', appId } }),
+
+  openAppConfigAt: (appId, groupId) =>
+    set({ selectedAppId: appId, detailView: { type: 'app-config', appId }, pendingConfigScrollId: groupId }),
+
+  consumePendingConfigScrollId: () => {
+    const id = get().pendingConfigScrollId
+    if (id) set({ pendingConfigScrollId: null })
+    return id
+  },
 
   setInitialAppId: (appId) => set({ initialAppId: appId }),
 
@@ -313,6 +352,8 @@ export const useAppsPageStore = create<AppsPageState>()(
     set({
       selectedAppId: null,
       detailView: null,
+      pendingActivityScrollId: null,
+      pendingConfigScrollId: null,
       initialAppId: null,
       showInstallDialog: false,
       currentTab: 'my-digital-humans',
@@ -650,13 +691,4 @@ export const useAppsPageStore = create<AppsPageState>()(
       console.error('[AppsPageStore] checkUpdates error:', err)
     }
   },
-}),
-    {
-      name: 'halo-apps-page',
-      // Only persist the user's last automation tab preference
-      partialize: (state) => ({
-        lastAutomationTab: state.lastAutomationTab,
-      }),
-    }
-  )
-)
+}))

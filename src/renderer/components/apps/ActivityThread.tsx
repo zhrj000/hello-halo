@@ -36,6 +36,7 @@ export function ActivityThread({ appId }: ActivityThreadProps) {
     loadAppState,
   } = useAppsStore()
   const openSessionDetail = useAppsPageStore(s => s.openSessionDetail)
+  const consumePendingActivityScrollId = useAppsPageStore(s => s.consumePendingActivityScrollId)
 
   const app = apps.find(a => a.id === appId)
   const entries = activityEntries[appId] ?? []
@@ -83,13 +84,29 @@ export function ActivityThread({ appId }: ActivityThreadProps) {
     return () => observer.disconnect()
   }, [handleIntersect])
 
+  // Task panel deep-link: scroll to and briefly highlight a specific entry
+  // (set by openActivityThreadAt when a waiting_user task item is clicked).
+  // Re-runs as more pages load, since the target entry may not be on the
+  // first page yet; only consumes the intent once the element is found.
+  useEffect(() => {
+    const pendingId = useAppsPageStore.getState().pendingActivityScrollId
+    if (!pendingId) return
+    const el = document.getElementById(`activity-entry-${pendingId}`)
+    if (!el) return
+    consumePendingActivityScrollId()
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    el.classList.add('ring-2', 'ring-primary', 'rounded-md')
+    const timer = setTimeout(() => el.classList.remove('ring-2', 'ring-primary', 'rounded-md'), 2000)
+    return () => clearTimeout(timer)
+  }, [entries, consumePendingActivityScrollId])
+
   if (!app) return null
 
   const hasEntries = entries.length > 0 || isRunning
 
   return (
     <div className="flex flex-col h-full overflow-y-auto">
-      <div className="flex-1 px-4 py-2">
+      <div className="flex-1 px-4 sm:px-10 py-2">
         {!hasEntries ? (
           <div className="flex flex-col items-center justify-center py-16 text-center">
             <p className="text-sm text-muted-foreground">{t('No activity yet')}</p>
@@ -141,13 +158,14 @@ export function ActivityThread({ appId }: ActivityThreadProps) {
 
             {/* Activity entries */}
             {entries.map((entry, index) => (
-              <ActivityEntryCard
-                key={entry.id}
-                entry={entry}
-                appId={appId}
-                isLast={index === entries.length - 1 && !hasMore}
-                animationDelay={index < 10 ? index * 0.04 : undefined}
-              />
+              <div key={entry.id} id={`activity-entry-${entry.id}`}>
+                <ActivityEntryCard
+                  entry={entry}
+                  appId={appId}
+                  isLast={index === entries.length - 1 && !hasMore}
+                  animationDelay={index < 10 ? index * 0.04 : undefined}
+                />
+              </div>
             ))}
 
             {/* Infinite scroll sentinel */}

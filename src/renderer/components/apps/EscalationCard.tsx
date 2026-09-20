@@ -7,7 +7,7 @@
  */
 
 import { useState } from 'react'
-import { Loader2, MessageSquare, CheckCircle2, FileText, FolderOpen } from 'lucide-react'
+import { Loader2, MessageSquare, FileText, FolderOpen } from 'lucide-react'
 import type { ActivityEntry } from '../../../shared/apps/app-types'
 import { useAppsStore } from '../../stores/apps.store'
 import { useTranslation } from '../../i18n'
@@ -49,14 +49,11 @@ export function EscalationCard({ entry, appId }: EscalationCardProps) {
     const userAnswer = entry.userResponse?.choice ?? entry.userResponse?.text ?? ''
     return (
       <div className="space-y-2">
-        <div className="flex items-start gap-2 text-xs text-muted-foreground">
-          <CheckCircle2 className="w-3.5 h-3.5 text-green-500 mt-0.5 flex-shrink-0" />
-          <div>
-            <p className="italic">「{question}」</p>
-            <p className="mt-0.5">
-              {t('Your response')}: <span className="text-foreground font-medium">{userAnswer}</span>
-            </p>
-          </div>
+        <div className="text-xs text-muted-foreground">
+          <p className="italic">「{question}」</p>
+          <p className="mt-0.5">
+            {t('Your response')}: <span className="text-foreground font-medium">{userAnswer}</span>
+          </p>
         </div>
         {entry.content.dataPath ? (
           <div className="rounded-md border border-border overflow-hidden">

@@ -248,32 +248,32 @@ export function ArtifactFilesTab() {
         <button
           onClick={toggleViewMode}
           className={`
-            p-1 rounded transition-all duration-200
-            hover:bg-secondary/80
-            ${viewMode === 'tree' ? 'bg-secondary text-primary' : 'text-muted-foreground/50 hover:text-muted-foreground'}
+            w-7 h-7 flex items-center justify-center rounded-sm transition-colors ease-halo
+            hover:bg-secondary
+            ${viewMode === 'tree' ? 'bg-secondary text-accent-on-dark' : 'text-subtle-foreground hover:text-foreground'}
           `}
           title={viewMode === 'card' ? t('Switch to tree view') : t('Switch to card view')}
         >
           {viewMode === 'card' ? (
-            <FolderTree className="w-3.5 h-3.5" />
+            <FolderTree className="w-[15px] h-[15px]" strokeWidth={1.8} />
           ) : (
-            <LayoutGrid className="w-3.5 h-3.5" />
+            <LayoutGrid className="w-[15px] h-[15px]" strokeWidth={1.8} />
           )}
         </button>
         {isWebMode ? (
           <span
-            className="flex items-center gap-1.5 text-xs text-muted-foreground/50 cursor-not-allowed"
+            className="flex items-center gap-1.5 text-xs text-subtle-foreground cursor-not-allowed"
             title={t('Please open folder in client')}
           >
-            <Monitor className="w-3.5 h-3.5" />
+            <Monitor className="w-[15px] h-[15px]" strokeWidth={1.8} />
           </span>
         ) : (
           <button
             onClick={handleOpenFolder}
-            className="p-1 hover:bg-secondary rounded transition-colors"
+            className="w-7 h-7 flex items-center justify-center rounded-sm text-subtle-foreground transition-colors ease-halo hover:bg-secondary hover:text-foreground"
             title={t('Open folder')}
           >
-            <FolderOpen className="w-3.5 h-3.5 text-amber-500" />
+            <FolderOpen className="w-[15px] h-[15px]" strokeWidth={1.8} />
           </button>
         )}
       </div>

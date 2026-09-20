@@ -55,9 +55,9 @@ export function setPtyHostCrashHandler(handler: () => void): void {
 }
 
 function getWorkerEntryPath(): string {
-  // electron-vite puts worker output under out/main/worker/pty-host/index.mjs;
+  // electron-vite puts worker output under out/main/worker/pty-host/index.cjs;
   // __dirname at runtime is out/main/.
-  return join(__dirname, 'worker/pty-host/index.mjs')
+  return join(__dirname, 'worker/pty-host/index.cjs')
 }
 
 function forkHost(): ChildProcess {

@@ -30,6 +30,7 @@ import { wecomBotRpc } from '../shared/rpc/contracts/wecom-bot.contract'
 import { gitBashRpc } from '../shared/rpc/contracts/git-bash.contract'
 import { overlayRpc } from '../shared/rpc/contracts/overlay.contract'
 import { appRpc } from '../shared/rpc/contracts/app.contract'
+import { taskRpc } from '../shared/rpc/contracts/task.contract'
 import type {
   HealthStatusResponse,
   HealthStateResponse,
@@ -102,11 +103,11 @@ export interface HaloAPI {
   // Space
   getHaloSpace: () => Promise<IpcResponse>
   listSpaces: () => Promise<IpcResponse>
-  createSpace: (input: { name: string; icon: string; customPath?: string }) => Promise<IpcResponse>
+  createSpace: (input: { name: string; icon: string; color?: string; customPath?: string }) => Promise<IpcResponse>
   deleteSpace: (spaceId: string) => Promise<IpcResponse>
   getSpace: (spaceId: string) => Promise<IpcResponse>
   openSpaceFolder: (spaceId: string) => Promise<IpcResponse>
-  updateSpace: (spaceId: string, updates: { name?: string; icon?: string }) => Promise<IpcResponse>
+  updateSpace: (spaceId: string, updates: { name?: string; icon?: string; color?: string }) => Promise<IpcResponse>
   getDefaultSpacePath: () => Promise<IpcResponse>
   selectFolder: () => Promise<IpcResponse>
   updateSpacePreferences: (spaceId: string, preferences: {
@@ -117,6 +118,8 @@ export interface HaloAPI {
   }) => Promise<IpcResponse>
   getSpacePreferences: (spaceId: string) => Promise<IpcResponse>
   reorderSpaces: (spaceIds: string[]) => Promise<IpcResponse>
+  listSpaceSummaries: () => Promise<IpcResponse>
+  forgetSpace: (spaceId: string) => Promise<IpcResponse>
 
   // Conversation
   listConversations: (spaceId: string) => Promise<IpcResponse>
@@ -482,6 +485,9 @@ export interface HaloAPI {
   imChannelsReload: () => Promise<IpcResponse>
   imChannelsProviders: () => Promise<IpcResponse>
   imChannelsPermissionDefaults: () => Promise<IpcResponse>
+  imChannelsSetInstanceApp: (instanceId: string, appId: string) => Promise<IpcResponse>
+  imChannelsCreateInstance: (instance: unknown) => Promise<IpcResponse>
+  imChannelsUnbindInstance: (instanceId: string) => Promise<IpcResponse>
 
   // IM Sessions
   imSessionsList: (appId?: string) => Promise<IpcResponse>
@@ -508,6 +514,9 @@ export interface HaloAPI {
   appGetState: (appId: string) => Promise<IpcResponse>
   appGetActivity: (input: { appId: string; options?: { limit?: number; offset?: number; type?: string; since?: number } }) => Promise<IpcResponse>
   appGetSession: (input: { appId: string; runId: string }) => Promise<IpcResponse>
+  appGetRuns: (input: { appId: string; options?: { limit?: number; offset?: number } }) => Promise<IpcResponse<import('../shared/apps/app-types').AutomationRunWithSummary[]>>
+  appGetRunStats: (input: { appId: string; window?: number }) => Promise<IpcResponse<import('../shared/apps/app-types').RunStats>>
+  appGetOverview: (input?: { spaceId?: string }) => Promise<IpcResponse<import('../shared/apps/app-types').AppOverviewEntry[]>>
   appRespondEscalation: (input: { appId: string; escalationId: string; response: { ts: number; choice?: string; text?: string } }) => Promise<IpcResponse>
   appContinueRun: (input: { appId: string; runId: string }) => Promise<IpcResponse>
   appInjectRun: (input: { appId: string; runId: string; text: string }) => Promise<IpcResponse>
@@ -559,6 +568,14 @@ export interface HaloAPI {
   onAppNavigate: (callback: (data: unknown) => void) => () => void
   onImSessionUpdated: (callback: (data: unknown) => void) => () => void
   onImChannelInstanceUpdated: (callback: (data: unknown) => void) => () => void
+
+  // Task panel bookkeeping (completed-but-unseen conversations, post-view grace period)
+  taskListState: () => Promise<IpcResponse<import('../main/platform/task-state').ConversationTaskState[]>>
+  taskMarkUnseen: (conversationId: string, spaceId: string, title: string) => Promise<IpcResponse>
+  taskMarkRead: (conversationId: string, spaceId: string, title: string, originalStatus: 'completed-unseen' | 'error') => Promise<IpcResponse>
+  taskSetKept: (conversationId: string, kept: boolean) => Promise<IpcResponse>
+  taskRemoveState: (conversationId: string) => Promise<IpcResponse>
+  onTaskStateChanged: (callback: (data: unknown) => void) => () => void
 
   // Notification (in-app toast)
   onNotificationToast: (callback: (data: unknown) => void) => () => void
@@ -866,6 +883,10 @@ const api: HaloAPI = {
   onAppNavigate: (callback) => createEventListener('app:navigate', callback),
   onImSessionUpdated: (callback) => createEventListener('app:im-session-updated', callback),
   onImChannelInstanceUpdated: (callback) => createEventListener('im-channels:instance-updated', callback),
+
+  // Task panel bookkeeping (all derived from taskRpc contract)
+  ...bindRpc(taskRpc),
+  onTaskStateChanged: (callback) => createEventListener('task:state_changed', callback),
 
   // Store (App Registry) — most methods derived from storeRpc contract;
   // storeInstall keeps its custom progress-listener wrapper below.

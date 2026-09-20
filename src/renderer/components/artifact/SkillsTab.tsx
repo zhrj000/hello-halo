@@ -2,44 +2,36 @@
  * SkillsTab - "Skill" content for the space resource rail
  *
  * Read-only browse of every skill loadable in this space (disk-based, same
- * source AppSkillsSection uses — see main/apps/skill-discovery.ts). No
- * management actions; a row is clickable only when it maps to an installed
- * skill app, and jumps to that app's detail on the digital-humans page,
- * mirroring AppSkillsSection.openDetail.
+ * source AppSkillsSection uses — see main/apps/skill-discovery.ts).
+ *
+ * Clicking a row previews its SKILL.md in the canvas, consistent with the
+ * file tree's click-to-preview convention. The reveal-on-hover "Use" button
+ * is the quick-launch action — it pre-fills the skill's slash command into
+ * this space's composer (same `pendingComposerInput` channel StoreDetail's
+ * "Use" button already uses for the same purpose — see
+ * StoreDetail.handleUse) rather than navigating away to the digital-humans
+ * management page. Every listed skill supports both actions, not just ones
+ * with a matching InstalledApp record — "use" only needs the directory slug.
  */
 
-import { useState, useEffect, useCallback } from 'react'
-import { Terminal, Loader2 } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Loader2 } from 'lucide-react'
+import { APP_TYPE_GLYPH } from '../store/app-type-glyph'
 import { api } from '../../api'
 import { useSpaceStore } from '../../stores/space.store'
-import { useAppsStore } from '../../stores/apps.store'
-import { useAppStore } from '../../stores/app.store'
-import { useAppsPageStore, tabForAppType } from '../../stores/apps-page.store'
+import { useChatStore } from '../../stores/chat.store'
+import { useCanvasStore } from '../../stores/canvas.store'
 import { useTranslation } from '../../i18n'
-import { toSkillDirName } from '../../../shared/skill-naming'
-import type { AvailableSkill, InstalledApp } from '../../../shared/apps/app-types'
+import type { AvailableSkill } from '../../../shared/apps/app-types'
 import { SpaceResourceRow } from './SpaceResourceRow'
+import { AppTypeIcon } from '../store/AppTypeIcon'
 
 export function SkillsTab() {
   const { t } = useTranslation()
   const spaceId = useSpaceStore(state => state.currentSpace?.id ?? '')
-  const apps = useAppsStore(state => state.apps)
 
   const [skills, setSkills] = useState<AvailableSkill[]>([])
   const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    // AppsPage owns the initial loadApps() call; SkillsTab can render before
-    // that page ever mounts, so make sure the installed-apps list this needs
-    // for click-through is actually populated. apps.store has no
-    // loaded/in-flight dedup of its own, so guard here — skip the refetch
-    // once something (this tab, another mount, or AppsPage itself) has
-    // already populated or is populating the list.
-    const store = useAppsStore.getState()
-    if (store.apps.length === 0 && !store.isLoading) {
-      store.loadApps()
-    }
-  }, [])
 
   useEffect(() => {
     if (!spaceId) {
@@ -59,21 +51,27 @@ export function SkillsTab() {
     return () => { cancelled = true }
   }, [spaceId])
 
-  const findInstalled = useCallback((skill: AvailableSkill): InstalledApp | undefined =>
-    apps.find(a =>
-      a.spec.type === 'skill' &&
-      a.status !== 'uninstalled' &&
-      (skill.scope === 'global' ? a.spaceId === null : a.spaceId === spaceId) &&
-      toSkillDirName(a.specId) === skill.dirName
-    ),
-  [apps, spaceId])
+  const handleUse = (skill: AvailableSkill) => {
+    if (!spaceId) return
+    useChatStore.setState({
+      pendingComposerInput: {
+        spaceId,
+        text: `/${skill.dirName} `,
+        // Shown regardless of whether the current session has this skill in
+        // its own live command list (e.g. a brand-new, session-less
+        // conversation) — this list already confirmed the skill is real.
+        slashPreview: { command: `/${skill.dirName}`, label: skill.dirName, description: skill.description },
+      }
+    })
+  }
 
-  const openDetail = useCallback((installedApp: InstalledApp) => {
-    useAppStore.getState().navigate('apps')
-    const store = useAppsPageStore.getState()
-    store.setCurrentTab(tabForAppType('skill'))
-    store.selectApp(installedApp.id, 'skill', installedApp.spaceId ?? undefined)
-  }, [])
+  // Discovery guarantees every returned skill has a readable SKILL.md at
+  // this fixed path (main/apps/skill-discovery.ts) — same file the "use"
+  // command above ultimately invokes, opened read-only in the canvas so
+  // there's room to actually read it instead of squeezing it into the rail.
+  const handleViewDetail = (skill: AvailableSkill) => {
+    useCanvasStore.getState().openFile(`${skill.path}/SKILL.md`, skill.name)
+  }
 
   if (loading) {
     return (
@@ -84,29 +82,29 @@ export function SkillsTab() {
   }
 
   if (skills.length === 0) {
+    const SkillGlyph = APP_TYPE_GLYPH.skill
     return (
       <div className="flex flex-col items-center justify-center h-full text-center px-4 py-8">
-        <Terminal className="w-8 h-8 text-muted-foreground/40 mb-2" />
+        <SkillGlyph className="w-8 h-8 text-muted-foreground/40 mb-2" />
         <p className="text-xs text-muted-foreground">{t('No skills available yet.')}</p>
       </div>
     )
   }
 
   return (
-    <div className="p-2 space-y-1.5 overflow-y-auto h-full">
-      {skills.map(skill => {
-        const installedApp = findInstalled(skill)
-        return (
-          <SpaceResourceRow
-            key={`${skill.scope}:${skill.dirName}`}
-            icon={<Terminal className="w-4 h-4" />}
-            name={skill.name}
-            description={skill.description}
-            scope={skill.scope}
-            onClick={installedApp ? () => openDetail(installedApp) : undefined}
-          />
-        )
-      })}
+    <div className="py-2 px-1.5 space-y-1.5 overflow-y-auto h-full">
+      {skills.map(skill => (
+        <SpaceResourceRow
+          key={`${skill.scope}:${skill.dirName}`}
+          icon={<AppTypeIcon type="skill" name={skill.name} size="xs" />}
+          bareIcon
+          name={skill.name}
+          description={skill.description}
+          scope={skill.scope}
+          onClick={() => handleViewDetail(skill)}
+          onUse={() => handleUse(skill)}
+        />
+      ))}
     </div>
   )
 }

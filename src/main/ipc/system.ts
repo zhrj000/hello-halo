@@ -65,7 +65,8 @@ export function registerSystemHandlers(): void {
           mainWindow.setTitleBarOverlay({
             color: options.color,
             symbolColor: options.symbolColor,
-            height: 40
+            // One pixel short of Header's 48px — see main/index.ts.
+            height: 47
           })
         }
         return { success: true }

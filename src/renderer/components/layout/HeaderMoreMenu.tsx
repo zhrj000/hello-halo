@@ -13,15 +13,9 @@ import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
 import { useSpaceQuickActions } from '../../hooks/useSpaceQuickActions'
 import { useTranslation } from '../../i18n'
 
-interface HeaderMoreMenuProps {
-  /** Forwarded to useSpaceQuickActions — e.g. collapse the resource rail to
-   * hand the newly-opened browser tab its width back. */
-  onBrowserOpened?: () => void
-}
-
-export function HeaderMoreMenu({ onBrowserOpened }: HeaderMoreMenuProps) {
+export function HeaderMoreMenu() {
   const { t } = useTranslation()
-  const { canOpenBrowser, openBrowser, terminalAvailable, terminalCreating, openTerminal } = useSpaceQuickActions({ onBrowserOpened })
+  const { canOpenBrowser, openBrowser, terminalAvailable, terminalCreating, openTerminal } = useSpaceQuickActions()
 
   if (!canOpenBrowser && !terminalAvailable) return null
 
@@ -60,7 +54,7 @@ export function HeaderMoreMenu({ onBrowserOpened }: HeaderMoreMenuProps) {
               )}
               <span>
                 <span className="block text-sm text-foreground">{t('Open terminal')}</span>
-                <span className="block text-xs text-muted-foreground">{t('Current space directory')}</span>
+                <span className="block text-xs text-muted-foreground">{t('Current workspace directory')}</span>
               </span>
             </button>
           )}

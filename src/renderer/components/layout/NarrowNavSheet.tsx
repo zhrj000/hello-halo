@@ -14,11 +14,11 @@
  */
 
 import { useState } from 'react'
-import { Menu, X, MessageSquare, Bot, BookOpen, Store, ListChecks, Settings } from 'lucide-react'
+import { Menu, X, MessageSquare, Bot, BookOpen, Compass, SquareCheckBig, Settings } from 'lucide-react'
 import { useAppStore } from '../../stores/app.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useTaskPanelStore } from '../../stores/taskPanel.store'
-import { usePulseCount } from '../../stores/chat.store'
+import { useTaskCount } from '../../stores/task.store'
 import { useTranslation } from '../../i18n'
 import { useGoToConversation } from '../../hooks/useGoToConversation'
 
@@ -26,7 +26,7 @@ export function NarrowNavSheet() {
   const { t } = useTranslation()
   const navigate = useAppStore(s => s.navigate)
   const goToConversation = useGoToConversation()
-  const taskCount = usePulseCount()
+  const taskCount = useTaskCount()
   const openTaskPanel = useTaskPanelStore(s => s.toggle)
   const [isOpen, setIsOpen] = useState(false)
   const [isAnimatingOut, setIsAnimatingOut] = useState(false)
@@ -122,7 +122,7 @@ export function NarrowNavSheet() {
                 onClick={goStore}
                 className="w-full px-4 py-3 flex items-center gap-3 hover:bg-secondary/80 transition-colors"
               >
-                <Store className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                <Compass className="w-4 h-4 text-muted-foreground flex-shrink-0" />
                 <span className="text-sm text-foreground">{t('Store')}</span>
               </button>
 
@@ -130,7 +130,7 @@ export function NarrowNavSheet() {
                 onClick={goTasks}
                 className="w-full px-4 py-3 flex items-center gap-3 hover:bg-secondary/80 transition-colors"
               >
-                <ListChecks className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                <SquareCheckBig className="w-4 h-4 text-muted-foreground flex-shrink-0" />
                 <span className="text-sm text-foreground">{t('Tasks')}</span>
                 {taskCount > 0 && (
                   <span className="ml-auto text-xs text-muted-foreground tabular-nums">{taskCount}</span>

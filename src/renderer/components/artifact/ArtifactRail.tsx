@@ -16,20 +16,25 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { ArtifactFilesTab } from './ArtifactFilesTab'
+import { DigitalHumansTab } from './DigitalHumansTab'
 import { SkillsTab } from './SkillsTab'
 import { McpTab } from './McpTab'
 import { useCanvasStore } from '../../stores/canvas.store'
 import { ChevronRight, X } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { useIsMobile } from '../../hooks/useIsMobile'
-
-type RailTab = 'files' | 'skill' | 'mcp'
+import type { ArtifactRailTab as RailTab } from '../../types'
 
 // Width constraints (in pixels) - Desktop only
 const MIN_WIDTH = 200
 const MAX_WIDTH = 400
 const DEFAULT_WIDTH = 300
-const COLLAPSED_WIDTH = 48
+// Prototype: `.rail{display:none}` unless `.body.rail-open` — collapsed
+// means fully gone, not a persistent icon strip. 0 (not e.g. 48) so no
+// border/background is left visible; content stays mounted underneath
+// (CSS `hidden`, not unmounted) purely to preserve tab-internal state
+// (tree expansion, fetched lists) across a collapse/expand cycle.
+const COLLAPSED_WIDTH = 0
 const clampWidth = (v: number) => Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, v))
 
 interface ArtifactRailProps {
@@ -39,6 +44,9 @@ interface ArtifactRailProps {
   // Width persistence
   initialWidth?: number             // Persisted width from config
   onWidthChange?: (width: number) => void  // Callback when user finishes resizing
+  /** One-shot external tab request (e.g. a workspace card's asset chip) —
+   * every change switches to that tab, not just the first. */
+  initialTab?: RailTab
 }
 
 /** Tab strip — Files/Skill/MCP, each a sibling content component below. */
@@ -46,6 +54,7 @@ function TabStrip({ active, onChange }: { active: RailTab; onChange: (tab: RailT
   const { t } = useTranslation()
   const tabs: { id: RailTab; label: string }[] = [
     { id: 'files', label: t('Files') },
+    { id: 'digital-humans', label: t('Digital Humans') },
     { id: 'skill', label: t('Skill') },
     { id: 'mcp', label: t('MCP') },
   ]
@@ -55,8 +64,8 @@ function TabStrip({ active, onChange }: { active: RailTab; onChange: (tab: RailT
         <button
           key={tab.id}
           onClick={() => onChange(tab.id)}
-          className={`h-7 px-2.5 rounded-md text-sm font-medium transition-colors ${
-            active === tab.id ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground'
+          className={`h-[26px] px-2.5 rounded-sm text-xs transition-colors ease-halo ${
+            active === tab.id ? 'bg-secondary text-foreground font-medium' : 'text-subtle-foreground hover:text-foreground'
           }`}
           aria-current={active === tab.id}
         >
@@ -71,22 +80,32 @@ export function ArtifactRail({
   externalExpanded,
   onExpandedChange,
   initialWidth,
-  onWidthChange
+  onWidthChange,
+  initialTab
 }: ArtifactRailProps) {
   const { t } = useTranslation()
 
-  const [activeTab, setActiveTab] = useState<RailTab>('files')
+  const [activeTab, setActiveTab] = useState<RailTab>(initialTab ?? 'files')
   // Skill/MCP each do a real fetch (disk scan / IPC call) on mount, so they
   // must not mount until the user actually opens that tab — CSS-hidden
   // alone isn't enough, since hidden tabs still stay in the React tree and
   // run their effects. Once opened, a tab keeps its mount (added to this
   // set, never removed) so switching away and back doesn't refetch.
-  const [mountedTabs, setMountedTabs] = useState<Set<RailTab>>(() => new Set<RailTab>(['files']))
+  const [mountedTabs, setMountedTabs] = useState<Set<RailTab>>(() => new Set<RailTab>(['files', ...(initialTab ? [initialTab] : [])]))
 
   const handleTabChange = useCallback((tab: RailTab) => {
     setActiveTab(tab)
     setMountedTabs(prev => (prev.has(tab) ? prev : new Set(prev).add(tab)))
   }, [])
+
+  // The rail is a long-lived singleton (mounted once by SpacePage), so a
+  // later `initialTab` change — e.g. a workspace card's asset chip, clicked
+  // while already on this space — must still switch tabs, not just seed the
+  // first render.
+  useEffect(() => {
+    if (initialTab) handleTabChange(initialTab)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialTab])
 
   const isControlled = externalExpanded !== undefined
   const [internalExpanded, setInternalExpanded] = useState(true)
@@ -180,6 +199,11 @@ export function ArtifactRail({
       <div className={`flex-1 flex flex-col overflow-hidden${activeTab === 'files' ? '' : ' hidden'}`}>
         <ArtifactFilesTab />
       </div>
+      {mountedTabs.has('digital-humans') && (
+        <div className={`flex-1 flex flex-col overflow-hidden${activeTab === 'digital-humans' ? '' : ' hidden'}`}>
+          <DigitalHumansTab />
+        </div>
+      )}
       {mountedTabs.has('skill') && (
         <div className={`flex-1 flex flex-col overflow-hidden${activeTab === 'skill' ? '' : ' hidden'}`}>
           <SkillsTab />
@@ -212,7 +236,7 @@ export function ArtifactRail({
             active:scale-95
             transition-all duration-200
           "
-          aria-label={t('Open space resources')}
+          aria-label={t('Open workspace resources')}
         >
           <ChevronRight className="w-4 h-4 text-muted-foreground rotate-180" />
         </button>
@@ -262,7 +286,7 @@ export function ArtifactRail({
   return (
     <div
       ref={railRef}
-      className="h-full flex-shrink-0 border-l border-border bg-card/30 flex flex-col relative"
+      className={`h-full flex-shrink-0 flex flex-col relative overflow-hidden ${isExpanded ? 'border-l border-border bg-card' : ''}`}
       style={{
         width: displayWidth,
         // Disable transition when: dragging OR Canvas is open (prevent layout flicker)
@@ -280,16 +304,22 @@ export function ArtifactRail({
         />
       )}
 
-      {/* Header - height matches CanvasTabs (py-1.5 + h-7 content = ~40px) */}
-      <div className="flex-shrink-0 px-3 h-10 border-b border-border flex items-center justify-between">
-        {isExpanded && <TabStrip active={activeTab} onChange={handleTabChange} />}
-        <button
-          onClick={handleToggleExpanded}
-          className="p-1 hover:bg-secondary rounded transition-colors"
-        >
-          <ChevronRight className={`w-4 h-4 transition-transform ${isExpanded ? '' : 'rotate-180'}`} />
-        </button>
-      </div>
+      {/* Header — only rendered while expanded. Reopening is the page
+          Header's toggle button (prototype: `#railBtn`), same as this
+          button (prototype: rail-head's own `.icon-btn`) is only the
+          collapse direction — there's no icon-only strip to click when
+          closed, matching the prototype's binary show/hide. */}
+      {isExpanded && (
+        <div className="flex-shrink-0 pl-3 pr-1.5 h-10 border-b border-border flex items-center justify-between">
+          <TabStrip active={activeTab} onChange={handleTabChange} />
+          <button
+            onClick={handleToggleExpanded}
+            className="w-8 h-8 flex items-center justify-center rounded-sm text-subtle-foreground transition-colors ease-halo hover:bg-secondary hover:text-foreground"
+          >
+            <ChevronRight className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* Content — CSS-hidden when collapsed to preserve tab-internal state (tree expansion, fetched lists) */}
       <div className={`flex-1 flex flex-col overflow-hidden${isExpanded ? '' : ' hidden'}`}>

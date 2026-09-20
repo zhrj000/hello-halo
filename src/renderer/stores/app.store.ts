@@ -8,6 +8,8 @@ import { isCapacitor } from '../api/transport'
 import type { HaloConfig, AppView, McpServerStatus } from '../types'
 import { hasAnyAISource } from '../types'
 import { useSpaceStore } from './space.store'
+import { useAppsStore } from './apps.store'
+import { useChatStore } from './chat.store'
 
 // Git Bash installation progress
 interface GitBashInstallProgress {
@@ -61,6 +63,8 @@ interface AppState {
   setLoading: (loading: boolean) => void
   setError: (error: string | null) => void
   setConfig: (config: HaloConfig) => void
+  /** Re-read config from main after a write that bypassed setConfig. */
+  refreshConfig: () => Promise<void>
   updateConfig: (updates: Partial<HaloConfig>) => void
   setMcpStatus: (status: McpServerStatus[], timestamp: number) => void
 
@@ -111,11 +115,32 @@ export const useAppStore = create<AppState>((set, get) => ({
       spaceStore.refreshCurrentSpace()  // fire-and-forget: fills in preferences once loaded
     }
     set({ view: 'space' })
+
+    // Fire-and-forget: without this, running/waiting automation apps only
+    // appear in the task panel after the user visits the Apps page, since
+    // that page is what previously triggered loadApps/loadAppState.
+    useAppsStore.getState().loadAutomationTaskState().catch(err => {
+      console.error('[Store] loadAutomationTaskState error:', err)
+    })
+
+    // Fire-and-forget: restores completed-but-unseen conversations and
+    // in-progress grace periods that were persisted before the last restart.
+    useChatStore.getState().loadPersistedTaskState().catch(err => {
+      console.error('[Store] loadPersistedTaskState error:', err)
+    })
   },
 
   setLoading: (isLoading) => set({ isLoading }),
   setError: (error) => set({ error }),
   setConfig: (config) => set({ config }),
+
+  // Config is loaded once at startup, so a write made in main (e.g. binding a
+  // bot from a digital human's settings page) leaves every other config-backed
+  // view stale until restart. Surfaces that write through main call this.
+  refreshConfig: async () => {
+    const response = await api.getConfig()
+    if (response.success && response.data) set({ config: response.data as HaloConfig })
+  },
 
   updateConfig: (updates) => {
     const currentConfig = get().config

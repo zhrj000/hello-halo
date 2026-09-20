@@ -21,6 +21,7 @@ import { useSpaceStore } from '../../stores/space.store'
 import { useTranslation } from '../../i18n'
 import { api } from '../../api'
 import type { McpServerConfig } from '../../../shared/apps/spec-types'
+import { GLOBAL_SCOPE } from '../../../shared/apps/scope'
 import {
   internalMcpServerToJsonConfig,
   keyValueLinesToRecord,
@@ -28,8 +29,6 @@ import {
   recordToKeyValueLines,
   type NamedMcpServerConfig,
 } from '../../utils/mcpConfigCompat'
-
-const GLOBAL_SCOPE = '__global__'
 
 type AddType = 'mcp' | 'skill' | 'file'
 
@@ -427,7 +426,7 @@ function McpForm({ onClose, installApp, loadApps }: FormProps) {
             onChange={e => setSelectedSpaceId(e.target.value)}
             className="w-full px-3 py-2 text-sm bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 transition-colors"
           >
-            <option value={GLOBAL_SCOPE}>{t('Global (all spaces)')}</option>
+            <option value={GLOBAL_SCOPE}>{t('Global (all workspaces)')}</option>
             {allSpaces.map(s => (
               <option key={s.id} value={s.id}>{s.name}</option>
             ))}
