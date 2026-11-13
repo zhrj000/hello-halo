@@ -20,6 +20,7 @@ import type { TodoItem } from '../../utils/thought-activity'
 import { ToolResultViewer } from './tool-result'
 import { NestedToolTimeline } from './NestedToolTimeline'
 import { ArrivalCard, arrivalIcon } from './ArrivalCard'
+import { isTeamMessage } from './team-collab'
 import { isArrivalThought, workSeconds } from './transcript'
 import { ErrorContent } from './ErrorContent'
 import { SkillNotice } from './SkillNotice'
@@ -57,13 +58,13 @@ const ThoughtStep = memo(function ThoughtStep({ thought, isLast, live, allThough
     return (
       <div className="flex gap-2.5 group animate-fade-in">
         <div className="flex flex-col items-center">
-          <ArrivalIcon size={14} className="mt-[3px] shrink-0 text-primary" />
+          <ArrivalIcon size={14} className={`mt-[3px] shrink-0 ${isTeamMessage(thought.arrival) ? 'text-faint-foreground' : 'text-primary'}`} />
           {!isLast && <div className={STEP_RAIL} />}
         </div>
         <div className="flex-1 pb-3 min-w-0">
-          <div className="rounded-lg border border-border-soft bg-muted/15 overflow-hidden">
-            <ArrivalCard message={thought.arrival} />
-          </div>
+          {isTeamMessage(thought.arrival)
+            ? <ArrivalCard message={thought.arrival} />
+            : <div className="overflow-hidden rounded-lg border border-border-soft bg-muted/15"><ArrivalCard message={thought.arrival} /></div>}
         </div>
       </div>
     )

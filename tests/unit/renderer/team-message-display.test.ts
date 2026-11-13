@@ -19,6 +19,7 @@ vi.mock('react', async original => ({
   useMemo: (compute: () => unknown) => compute(),
 }))
 vi.mock('../../../src/renderer/i18n', () => ({
+  getCurrentLanguage: () => 'en-US',
   useTranslation: () => ({
     t: (text: string, values?: Record<string, string>) => text.replace(/\{\{(\w+)\}\}/g, (_, key: string) => values?.[key] ?? ''),
   }),
