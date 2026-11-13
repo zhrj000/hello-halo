@@ -555,5 +555,14 @@ export const migrations: Migration[] = [
         );
       `)
     }
+  },
+  {
+    version: 26,
+    description: 'Index bounded native task pages by team and activity',
+    up(db) {
+      db.exec(`CREATE INDEX idx_epochs_native_recency
+        ON team_epochs(team_id, COALESCE(last_activity_at, started_at) DESC, id DESC)
+        WHERE lifecycle = 'conversation' AND chat_key GLOB 'native:*'`)
+    }
   }
 ]

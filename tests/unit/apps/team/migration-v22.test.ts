@@ -106,7 +106,7 @@ describe('temporary participant migrations on populated v21 storage', () => {
 
     manager.runMigrations(db, MIGRATION_NAMESPACE, migrations)
 
-    expect(db.prepare('SELECT version FROM _migrations WHERE namespace = ?').get(MIGRATION_NAMESPACE)).toEqual({ version: 25 })
+    expect(db.prepare('SELECT version FROM _migrations WHERE namespace = ?').get(MIGRATION_NAMESPACE)).toEqual({ version: 26 })
     expect(snapshot(db, legacyTables)).toEqual(before)
     for (const table of addedTables) expect(db.prepare(`SELECT * FROM ${table}`).all()).toEqual([])
     expect(db.pragma('foreign_keys', { simple: true })).toBe(1)

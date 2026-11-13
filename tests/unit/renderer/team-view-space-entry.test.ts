@@ -93,6 +93,7 @@ describe('team view opened from a space conversation', () => {
   it('shows a team that no space conversation coordinates as the full workbench', () => {
     const html = render({ ephemeral: false, coordinatorConversationId: null }, true)
     expect(html).toContain('data-room="standalone"')
+    expect(html).not.toContain('Team conversations are on the home page.')
     expect(html).toContain('data-task-sidebar')
     expect(html).toContain('Team settings')
   })
@@ -100,6 +101,7 @@ describe('team view opened from a space conversation', () => {
   it('shows a kept collaboration as the full workbench on the Teams page', () => {
     const html = render({ ephemeral: false, coordinatorConversationId: 'conv' }, false)
     expect(html).toContain('data-room="standalone"')
+    expect(html).not.toContain('Team conversations are on the home page.')
     expect(html).toContain('data-task-sidebar')
     expect(html).toContain('Team settings')
   })

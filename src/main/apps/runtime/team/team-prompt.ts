@@ -130,6 +130,12 @@ export function buildTeamEntry(ctx: TeamPromptContext): string {
     '  have finished the work and not recorded it. To find out whether something',
     '  happened, ask the person — never conclude it did not because the board is',
     '  silent.',
+    ...(ctx.temporaryCollaboration ? [] : [
+      '- The board covers THIS conversation only. Each conversation with the team',
+      '  starts with an empty board; work done in its other conversations is not',
+      '  on it. An empty board here never means the team has done nothing. When',
+      '  asked about past or recent work, ask the teammates who would know.',
+    ]),
     '- Use team_post_task / team_update_task when explicit ownership and progress',
     '  tracking are useful; small requests need no board task. Posting a task does',
     '  not dispatch it. Use team_send to give the assignee its instructions.',

@@ -19,6 +19,32 @@ Publication ownership rules are supplied by the engine-independent
 facade. The team store remains authoritative; the library stores no mirror of
 published refs and imports no Halo application code.
 
+The homepage reads `listNativeTasks({ spaceId, limit, cursor })`: a bounded,
+recency-ordered page of native conversation metadata for persistent teams.
+Hosted teams use their owning space; joined teams qualify through a local member
+installed in that space. The cursor is scoped to that space and ordered by last
+activity plus epoch id. Page projection reads only selected-epoch statistics,
+without transcripts or artifact counts. This is separate from the workbench's
+complete per-team list. IPC and remote HTTP expose the same service contract.
+
+Optional `epochIds` resolves persisted pins independently of the recency page,
+using the identical local/joined, native, non-ephemeral scope. It accepts at most
+100 nonempty string IDs, cannot accompany a cursor, and returns `nextCursor: null`.
+An empty array resolves nothing; missing or out-of-scope IDs are omitted. The
+normal bounded limit still applies (default 30, maximum 100); pin refreshes use
+`limit: 100`. HTTP encodes `epochIds` as a JSON query array. Filtering occurs in
+SQL before the candidate limit, so old pins do not require scanning recent pages.
+
+`scope: 'mine'` narrows the recency page to what concerns the viewer, again in
+SQL before the candidate limit so other people's tasks cannot crowd a page. A
+task qualifies when the viewer started it (`task_created_by`), a decision awaits
+the viewer on it (ids taken from the in-memory pending list), it predates
+creator tracking in a team with no other person's members, or one of the
+viewer's digital humans took part and it moved within the last 7 days. Running
+tasks fall inside that window because a turn stamps `last_activity_at` on entry.
+`startedBy` carries the starter's display name when the entry member belongs to
+someone else. Pin lookups by `epochIds` are never scoped.
+
 The store does not execute agents, route messages or own transport handlers.
 Business rules live in the service; live coordination belongs to `runtime/team`.
 
@@ -244,7 +270,10 @@ logged), written through on every change.
   (`spaceCoordinatorAppId(conversationId)`, `shared/apps/team-types`), which
   also occupies a member row (`member_name = 'coordinator'`, `is_lead`,
   `is_system_coordinator`, `ai_provisioned = 0` so dissolve never tries to
-  uninstall an app that does not exist). Consequences the code keeps:
+  uninstall an app that does not exist). It is named, once, after the space
+  conversation's title, falling back to the first collaborator's brief when the
+  conversation has none; the name is also the collaboration room's label.
+  Consequences the code keeps:
   - the sentinel has no app record, so anything keyed on "the app's space"
     reads the team's `owning_space_id` for it instead (`listArtifacts`, and the
     runtime's `createMemberWorkDirResolver`).

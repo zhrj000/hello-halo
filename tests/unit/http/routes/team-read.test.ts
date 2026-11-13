@@ -44,6 +44,7 @@ const getOpenConversationEpoch = vi.fn<[string, string], { id: string } | null>(
 const listEpochsByTeam = vi.fn<[string], Array<{ id: string }>>()
 const getTeamById = vi.fn<[string], { leadAppId: string | null; ephemeral?: boolean } | null>()
 const listEpochs = vi.fn<[string], unknown[]>()
+const listNativeTasks = vi.fn()
 const getTeamDetail = vi.fn<[string], unknown>()
 const getEpochRoster = vi.fn<[string, string], unknown>()
 const getEpochBoard = vi.fn<[string, string], unknown>()
@@ -58,6 +59,7 @@ vi.mock('../../../../src/main/apps/team', async () => ({
     getTeam: (teamId: string) => getTeamById(teamId),
     openTeamDetail: async (teamId: string) => getTeamDetail(teamId),
     listEpochs: (teamId: string) => listEpochs(teamId),
+    listNativeTasks: (input: unknown) => listNativeTasks(input),
     getTeamDetail: (teamId: string) => getTeamDetail(teamId),
     getEpochRoster: (teamId: string, epochId: string) => getEpochRoster(teamId, epochId),
     getEpochBoard: (teamId: string, epochId: string) => getEpochBoard(teamId, epochId),
@@ -230,6 +232,71 @@ async function expectConversationRequired(res: Response, listed: boolean): Promi
     expect(body).not.toHaveProperty('candidates')
   }
 }
+
+describe('GET /api/teams/native-tasks', () => {
+  it('delegates the bounded space query without resolving a team ID', async () => {
+    const page = { items: [{ epochId: 'task-1', teamId: 'team-1' }], nextCursor: 'next' }
+    listNativeTasks.mockReturnValueOnce(page)
+    await withServer(buildApp(null), async base => {
+      const response = await fetch(`${base}/api/teams/native-tasks?spaceId=space-1&limit=20&cursor=previous`)
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({ success: true, data: page })
+    })
+    expect(listNativeTasks).toHaveBeenCalledWith({ spaceId: 'space-1', limit: 20, cursor: 'previous' })
+    expect(getTeamById).not.toHaveBeenCalled()
+  })
+
+  it.each([{ epochIds: ['old-task', 'missing'] }, { epochIds: [] }])('passes JSON exact IDs $epochIds to the scoped service', async ({ epochIds }) => {
+    const page = { items: [], nextCursor: null }
+    listNativeTasks.mockReturnValueOnce(page)
+    await withServer(buildApp(null), async base => {
+      const query = new URLSearchParams({ spaceId: 'space-1', epochIds: JSON.stringify(epochIds), limit: '100' })
+      const response = await fetch(`${base}/api/teams/native-tasks?${query}`)
+      expect(await response.json()).toEqual({ success: true, data: page })
+    })
+    expect(listNativeTasks).toHaveBeenCalledWith({ spaceId: 'space-1', epochIds, limit: 100 })
+  })
+
+  it.each(['broken', 'null', '{}', '"task"', '[1]', '[""]', '["  "]', JSON.stringify(Array(101).fill('task'))])(
+    'rejects invalid JSON exact IDs %s', async epochIds => {
+      await withServer(buildApp(null), async base => {
+        const query = new URLSearchParams({ spaceId: 'space-1', epochIds })
+        const response = await fetch(`${base}/api/teams/native-tasks?${query}`)
+        expect(response.status).toBe(400)
+        expect((await response.json()).success).toBe(false)
+      })
+      expect(listNativeTasks).not.toHaveBeenCalled()
+    },
+  )
+
+  it('rejects office credentials before enumerating local tasks', async () => {
+    await withServer(buildApp('X'), async base => {
+      const response = await fetch(`${base}/api/teams/native-tasks?spaceId=space-1`)
+      expect(response.status).toBe(403)
+      expect(await response.json()).toEqual({ success: false, error: 'Forbidden' })
+    })
+    expect(listNativeTasks).not.toHaveBeenCalled()
+  })
+
+  it.each(['', '?spaceId=a&spaceId=b', '?spaceId=a&limit=1&limit=2', '?spaceId=a&cursor=x&cursor=y', '?spaceId=a&epochIds=[]&epochIds=[]', '?spaceId=a&epochIds=[]&cursor='])(
+    'rejects malformed query %s', async query => {
+      await withServer(buildApp(null), async base => {
+        const response = await fetch(`${base}/api/teams/native-tasks${query}`)
+        expect(response.status).toBe(400)
+        expect((await response.json()).success).toBe(false)
+      })
+      expect(listNativeTasks).not.toHaveBeenCalled()
+    },
+  )
+
+  it('reports service validation errors without claiming success', async () => {
+    listNativeTasks.mockImplementationOnce(() => { throw new Error('Invalid native task cursor') })
+    await withServer(buildApp(null), async base => {
+      const response = await fetch(`${base}/api/teams/native-tasks?spaceId=a&cursor=invalid`)
+      expect(await response.json()).toEqual({ success: false, error: 'Invalid native task cursor' })
+    })
+  })
+})
 
 // ── Cross-office isolation ────────────────────────────────────────────────
 

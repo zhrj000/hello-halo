@@ -12,6 +12,7 @@ import type { TeamService } from '../apps/team'
 import type { OfficeScope } from '../apps/federation/index'
 import type {
   CreateTeamInput,
+  TeamListNativeTasksInput,
   UpdateTeamInput,
   TeamMemberInput,
   UpdateTeamMemberInput,
@@ -47,6 +48,10 @@ async function handle<T>(label: string, fn: (service: TeamService) => Promise<T>
 }
 
 export function registerTeamIpc(): void {
+  ipcMain.handle(TEAM_IPC.listNativeTasks, async (_e, input: TeamListNativeTasksInput) =>
+    handle('team:list-native-tasks', (s) => s.listNativeTasks(input))
+  )
+
   ipcMain.handle(TEAM_IPC.list, async (_e, spaceId?: string) =>
     handle('team:list', (s) => s.listTeamItems(spaceId))
   )

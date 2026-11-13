@@ -40,7 +40,7 @@ export function DigitalHumansTab({ onItemsChange }: DigitalHumansTabProps) {
   const { t } = useTranslation()
   const spaceId = useSpaceStore(state => state.currentSpace?.id ?? '')
   const appStates = useAppsStore(s => s.appStates)
-  const digitalHumans = useSpaceDigitalHumans(spaceId, { includeCoordinators: true })
+  const digitalHumans = useSpaceDigitalHumans(spaceId)
   const teams = useTeamStore(s => s.teams)
   const coordinators = useMemo(() => coordinatorIds(teams), [teams])
 

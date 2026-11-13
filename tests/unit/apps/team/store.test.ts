@@ -25,6 +25,7 @@ import type {
   BlackboardFinding,
   TeamEpoch,
   TeamToolAudit,
+  NativeTaskScope,
 } from '../../../../src/main/apps/team/types'
 
 // ============================================
@@ -192,6 +193,95 @@ describe('TeamStore', () => {
       // because it describes the owner's computer rather than the office.
       store.insertToolAudit(entry())
       expect(store.listActivityByTeam('team-1')).toHaveLength(0)
+    })
+  })
+
+  describe('native homepage task scope', () => {
+    it('includes joined tasks only through local members and excludes external and temporary work', () => {
+      store.insertTeam(makeTeam())
+      store.insertTeam(makeTeam({ id: 'joined', name: 'Joined', owningSpaceId: 'office', hostNodeId: 'host' }))
+      store.insertTeam(makeTeam({ id: 'temp', name: 'Temporary', ephemeral: true }))
+      store.addMember(makeMember({ teamId: 'joined', appId: 'local', origin: 'remote', ownerNodeId: 'SELF' }))
+      store.addMember(makeMember({ teamId: 'joined', appId: 'other', memberName: 'other', origin: 'remote', ownerNodeId: 'elsewhere' }))
+      for (const [id, teamId, chatKey] of [['native', 'team-1', 'native:a'], ['joined-task', 'joined', 'native:b'], ['temporary', 'temp', 'native:c'], ['im', 'team-1', 'im:group']]) {
+        store.insertEpoch(makeEpoch({ id, teamId, chatKey, lifecycle: 'conversation', startedAt: 100 }), 'event')
+      }
+      expect(store.listNativeTaskEpochs(SPACE_A, ['local'], 10).map(row => row.id).sort()).toEqual(['joined-task', 'native'])
+      expect(store.listNativeTaskEpochs(SPACE_B, ['other'], 10)).toEqual([])
+      expect(store.listNativeTaskEpochs(SPACE_B, ['local'], 10).map(row => row.id)).toEqual(['joined-task'])
+      expect(store.listNativeTaskEpochs(SPACE_A, [], 10).map(row => row.id)).toEqual(['native'])
+      store.insertEpoch(makeEpoch({ id: 'newer', chatKey: 'native:new', lifecycle: 'conversation', startedAt: 200 }), 'event')
+      const ids = ['native', 'joined-task', 'temporary', 'im', 'missing', 'native']
+      expect(store.listNativeTaskEpochs(SPACE_A, ['local'], 10, undefined, ids).map(row => row.id).sort()).toEqual(['joined-task', 'native'])
+      expect(store.listNativeTaskEpochs(SPACE_A, [], 1, undefined, ids).map(row => row.id)).toEqual(['native'])
+      expect(store.listNativeTaskEpochs(SPACE_B, ['other'], 10, undefined, ids)).toEqual([])
+      expect(store.listNativeTaskEpochs(SPACE_B, ['local'], 10, undefined, ids).map(row => row.id)).toEqual(['joined-task'])
+      expect(store.listNativeTaskEpochs(SPACE_A, ['local'], 10, undefined, [])).toEqual([])
+      expect(store.listNativeTaskEpochs(SPACE_A, ['local'], 1, undefined, ids)).toHaveLength(1)
+    })
+
+    describe('mine scope', () => {
+      const NOW = 10 * 24 * 3600_000
+      const WEEK = 7 * 24 * 3600_000
+      const scope = (overrides?: Partial<NativeTaskScope>): NativeTaskScope => ({ viewer: 'me', involvedSince: NOW - WEEK, attentionEpochIds: [], ...overrides })
+      const task = (id: string, createdBy: string | null, lastActivityAt: number, teamId = 'team-1') =>
+        store.insertEpoch(makeEpoch({
+          id, teamId, chatKey: `native:${id}`, lifecycle: 'conversation', startedAt: lastActivityAt, lastActivityAt,
+          workItem: createdBy === null ? undefined : { id, teamId, createdAt: lastActivityAt, title: id, status: 'open', createdBy, entryAppId: null, updatedAt: lastActivityAt },
+        }), 'event')
+      const ids = (s: NativeTaskScope, limit = 20) => store.listNativeTaskEpochs(SPACE_A, ['mine-app'], limit, undefined, undefined, s).map(row => row.id)
+
+      beforeEach(() => {
+        store.insertTeam(makeTeam())
+        store.addMember(makeMember({ appId: 'mine-app', memberName: 'mine' }))
+      })
+
+      it('keeps tasks the viewer started and drops other people\u2019s', () => {
+        task('mine', 'me', NOW)
+        task('theirs', 'someone', NOW)
+        expect(ids(scope())).toEqual(['mine'])
+      })
+
+      it('keeps a task a decision is waiting on the viewer for', () => {
+        task('theirs', 'someone', NOW)
+        expect(ids(scope({ attentionEpochIds: ['theirs'] }))).toEqual(['theirs'])
+      })
+
+      it('keeps involved tasks only inside the recency window', () => {
+        task('recent', 'someone', NOW - 1000)
+        task('stale', 'someone', NOW - WEEK - 1000)
+        store.insertActivity({ id: 'a1', teamId: 'team-1', epochId: 'recent', kind: 'message', actorAppId: 'mine-app', targetAppId: 'their-app', subject: 's', body: 'b', refId: null, correlationId: null, status: 'ok', createdAt: NOW - 1000 })
+        store.insertActivity({ id: 'a2', teamId: 'team-1', epochId: 'stale', kind: 'message', actorAppId: 'mine-app', targetAppId: 'their-app', subject: 's', body: 'b', refId: null, correlationId: null, status: 'ok', createdAt: NOW - WEEK - 1000 })
+        expect(ids(scope())).toEqual(['recent'])
+      })
+
+      it('counts an assignee on the board as involvement', () => {
+        task('assigned', 'someone', NOW)
+        store.insertTask(makeTask({ id: 't', epochId: 'assigned', assigneeAppId: 'mine-app', createdByAppId: 'their-app' }))
+        expect(ids(scope())).toEqual(['assigned'])
+      })
+
+      it('treats a task without a recorded creator as the viewer\u2019s only when no other person is on the team', () => {
+        task('legacy', null, NOW)
+        expect(ids(scope())).toEqual(['legacy'])
+        store.insertTeam(makeTeam({ id: 'shared', name: 'Shared' }))
+        store.addMember(makeMember({ teamId: 'shared', appId: 'friend', memberName: 'friend', origin: 'remote', ownerNodeId: 'elsewhere' }))
+        task('legacy-shared', null, NOW, 'shared')
+        expect(ids(scope())).toEqual(['legacy'])
+      })
+
+      it('fills a page with the viewer\u2019s tasks despite newer tasks of others', () => {
+        for (let i = 0; i < 5; i++) task(`other-${i}`, 'someone', NOW + 100 + i)
+        task('mine-1', 'me', NOW)
+        task('mine-2', 'me', NOW - 1)
+        expect(ids(scope(), 2)).toEqual(['mine-1', 'mine-2'])
+      })
+
+      it('does not scope a lookup by id', () => {
+        task('theirs', 'someone', NOW)
+        const rows = store.listNativeTaskEpochs(SPACE_A, ['mine-app'], 5, undefined, ['theirs'])
+        expect(rows.map(row => row.id)).toEqual(['theirs'])
+      })
     })
   })
 

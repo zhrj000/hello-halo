@@ -4,6 +4,8 @@ import { ensureExtendedServicesReady } from './bootstrap-ready'
 import type { ApiResponse } from './_shared'
 import type {
   CreateTeamInput,
+  TeamListNativeTasksInput,
+  TeamNativeTaskPage,
   UpdateTeamInput,
   TeamMemberInput,
   UpdateTeamMemberInput,
@@ -18,6 +20,19 @@ import type { ImageAttachment } from '../../shared/types/image-attachment'
 import type { ContentReference } from '../../shared/types/content-reference'
 
 export const teamApi = {
+  teamListNativeTasks: async (input: TeamListNativeTasksInput): Promise<ApiResponse<TeamNativeTaskPage>> => {
+    if (isElectron()) {
+      await ensureExtendedServicesReady()
+      return window.halo.teamListNativeTasks(input)
+    }
+    const query = new URLSearchParams({ spaceId: input.spaceId })
+    if (input.limit !== undefined) query.set('limit', String(input.limit))
+    if (input.cursor !== undefined) query.set('cursor', input.cursor)
+    if (input.epochIds !== undefined) query.set('epochIds', JSON.stringify(input.epochIds))
+    if (input.scope !== undefined) query.set('scope', input.scope)
+    return httpRequest('GET', `/api/teams/native-tasks?${query}`)
+  },
+
   // ===== Teams =====
   teamList: async (spaceId?: string): Promise<ApiResponse> => {
     if (isElectron()) {

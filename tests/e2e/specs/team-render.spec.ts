@@ -11,7 +11,7 @@
 import { test, expect } from '../fixtures/electron'
 import { navigateToApps, setTheme } from '../fixtures/helpers'
 import type { Page } from '@playwright/test'
-import { openTeamWorkbench } from '../fixtures/team-workbench'
+import { openTeamWorkbench, selectTaskMember, taskMemberRail } from '../fixtures/team-workbench'
 
 test.use({
   appStoreRegistries: [['official', 'mcp-official', 'smithery', 'claude-skills', 'skillhub'].map(id => ({
@@ -162,6 +162,70 @@ test.describe('Team render — §2 automatable subset', () => {
 test.describe('Task workbench interaction', () => {
   test.setTimeout(60000)
 
+  async function openHomepageTeam(window: Page) {
+    await window.getByRole('button', { name: 'Conversation', exact: true }).first().click()
+    const section = window.getByTitle('Conversations with digital humans available in this workspace', { exact: true })
+    if (await section.getAttribute('aria-expanded') !== 'true') await section.click()
+    const group = window.getByRole('button', { name: 'Workbench review', exact: true })
+    if (await group.getAttribute('aria-expanded') !== 'true') await group.click()
+  }
+
+  test('homepage task identity, drafts and old-entry navigation stay together', { annotation: { type: 'acceptance', description: JSON.stringify({ caseId: 'teams.tasks.homepage', evidence: 'ui', mode: 'none', variant: { entry: 'desktop', width: 'wide' } }) } }, async ({ electronApp, window }) => {
+    await openTeamWorkbench(electronApp, window, { remoteLead: true })
+    await openHomepageTeam(window)
+    await window.getByRole('button', { name: 'Product research', exact: true }).click()
+    const room = window.getByRole('region', { name: 'Conversation' })
+    await expect(room).toHaveCount(1)
+    await expect(room.locator('textarea')).toHaveCount(0)
+    await expect(room.getByText('Lead is Teammate’s digital human. To ask it something, tell Research.', { exact: true })).toBeVisible()
+    const rail = taskMemberRail(window)
+    const current = rail.locator('[aria-pressed="true"]')
+    await expect(current).toHaveAccessibleName(/^Lead( · |$)/)
+    const labels = () => rail.getByRole('button').evaluateAll(nodes => nodes.map(node => node.getAttribute('aria-label')))
+    const order = await labels()
+    await selectTaskMember(window, 'Research')
+    expect(await labels()).toEqual(order)
+    const input = room.locator('textarea')
+    const selectorBounds = await rail.boundingBox()
+    const inputBounds = await input.boundingBox()
+    expect(selectorBounds!.y).toBeLessThan(inputBounds!.y)
+    expect(inputBounds!.y - selectorBounds!.y).toBeLessThan(200)
+    await input.fill('Product task draft')
+    await window.getByRole('button', { name: 'Release notes', exact: true }).click()
+    await selectTaskMember(window, 'Research')
+    await expect(input).toHaveValue('')
+    await input.fill('Release task draft')
+    await window.getByRole('button', { name: 'Product research', exact: true }).click()
+    await expect(input).toHaveValue('Product task draft')
+    await expect(window.getByRole('button', { name: /^(Expand|Collapse) canvas$/ })).toBeVisible()
+    await window.getByRole('button', { name: 'New', exact: true }).click()
+    await expect(room).toHaveCount(0)
+    await expect(window.locator('textarea')).toBeVisible()
+    await navigateToTeams(window)
+    await window.getByRole('button', { name: /Workbench review/ }).click()
+    await window.getByRole('navigation', { name: 'Tasks', exact: true }).getByRole('button', { name: /Product research/ }).click()
+    const taskRoom = window.getByRole('region', { name: 'Task room' })
+    await expect(taskRoom).toHaveCount(1)
+    await expect(window.getByRole('navigation', { name: 'Tasks', exact: true })).toBeVisible()
+    await openHomepageTeam(window)
+    await window.getByRole('button', { name: 'Product research', exact: true }).click()
+    await expect(current).toHaveAccessibleName(/^Research( · |$)/)
+    await expect(input).toHaveValue('Product task draft')
+  })
+
+  test('a new team conversation opens without task onboarding', { annotation: { type: 'acceptance', description: JSON.stringify({ caseId: 'teams.tasks.conversation-entry', evidence: 'ui', mode: 'none', variant: { entry: 'desktop', width: 'wide' } }) } }, async ({ electronApp, window }) => {
+    await openTeamWorkbench(electronApp, window, { allowCreate: true })
+    await openHomepageTeam(window)
+    await window.getByRole('button', { name: 'New team conversation', exact: true }).click()
+    const room = window.getByRole('region', { name: 'Conversation', exact: true })
+    await expect(room.getByRole('heading', { name: 'New conversation', exact: true })).toBeVisible()
+    await expect(taskMemberRail(window).locator('[aria-pressed="true"]')).toHaveAccessibleName(/^Lead( · |$)/)
+    await expect(room.locator('textarea')).toBeEditable()
+    await expect(room.getByText('Start a new task', { exact: true })).toHaveCount(0)
+    await expect(room.getByText('Send your first message to create a task. Your digital human will coordinate with the team.', { exact: true })).toHaveCount(0)
+    await expect(window.getByRole('button', { name: 'Complete task', exact: true })).toHaveCount(0)
+  })
+
   test('bounded collaboration previews preserve task and member boundaries', { annotation: { type: 'acceptance', description: "{\"caseId\":\"teams.decisions.preview-scope\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window }) => {
     await openTeamWorkbench(electronApp, window)
     const room = window.getByRole('region', { name: 'Task room' })
@@ -242,17 +306,12 @@ test.describe('Task workbench interaction', () => {
     await room.getByRole('button', { name: 'Task activity', exact: true }).click()
     const dialog = window.getByRole('dialog', { name: 'Task activity' })
     await expect(dialog.getByText('Internal response to the teammate stopping.', { exact: true })).toHaveCount(0)
-    const notification = dialog.locator('details[data-system-notification-id]').filter({ has: window.locator('[data-message-id="stopped-system"]') })
-    await expect(notification).not.toHaveAttribute('open', '')
-    await notification.scrollIntoViewIfNeeded()
-    await window.screenshot({ path: testInfo.outputPath('notifications-collapsed.png') })
-    await expect(notification.getByText('[System] A teammate stopped its work. Internal notification.', { exact: true })).toBeHidden()
-    await notification.locator(':scope > summary').click()
-    const notificationRecord = notification.locator('article[data-message-id="stopped-system"]')
+    const notificationRecord = dialog.locator('article[data-message-id="stopped-system"]')
+    await expect(notificationRecord.locator('details')).toHaveCount(0)
     await expect(notificationRecord.getByText('[System] A teammate stopped its work. Internal notification.', { exact: true })).toBeVisible()
     await expect(notificationRecord.locator('[class*="bg-primary"]')).toHaveCount(0)
     await notificationRecord.scrollIntoViewIfNeeded()
-    await window.screenshot({ path: testInfo.outputPath('notifications-expanded.png') })
+    await window.screenshot({ path: testInfo.outputPath('notifications.png') })
     await window.setViewportSize({ width: 375, height: 812 })
     await expect(notificationRecord).toBeVisible()
     expect(await window.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBeTruthy()

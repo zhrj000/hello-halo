@@ -175,6 +175,13 @@ describe('temporary space collaborations', () => {
     expect(ctx.appManager.install).not.toHaveBeenCalled()
   })
 
+  it('labels the collaboration after its space conversation, keeping its opening name as the fallback', async () => {
+    const { team } = await ctx.service.ensureCollaboration({ owningSpaceId: SPACE, conversationId: CONVERSATION, title: 'You are the researcher. Task: draft the route' })
+    expect(ctx.service.listConversations(team.id)).toMatchObject([{ kind: 'collab', label: 'You are the researcher. Task: draft the route' }])
+    const service = createTeamService({ ...ctx.deps, describeChatKey: (_teamId, chatKey) => chatKey === spaceCollabChatKey(CONVERSATION) ? 'City walk route' : null })
+    expect(service.listConversations(team.id)).toMatchObject([{ kind: 'collab', label: 'City walk route' }])
+  })
+
   it('reads a private scope only for its local parent member and never saves it', async () => {
     const parent = await seedLegacyCollaboration(ctx)
     const member = ctx.store.listMembersByTeam(parent.team.id).find(item => item.aiProvisioned)!

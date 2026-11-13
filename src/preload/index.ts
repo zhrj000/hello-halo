@@ -9,12 +9,12 @@ import type { BrowserHostBridge, BrowserPageGone } from '../shared/types/browser
 import type { RpcContract, RpcClient } from '../shared/rpc/define'
 import type { CatalogModelCapability, ModelCapabilityOverride } from '../shared/types/model-capabilities'
 import type { ReasoningEffortLevel } from '../shared/constants/reasoning-effort'
-import type { EscalationResponse } from '../shared/apps/app-types'
+import type { AppChatInjectRequest, EscalationResponse } from '../shared/apps/app-types'
 import type { UpdaterChannel, UpdaterStatusPayload } from '../shared/types/updater'
 import type { GoalInput } from '../shared/types/goal'
 import type { CanvasContext } from '../shared/types/canvas-context'
 import type { ContentReference } from '../shared/types/content-reference'
-import type { AgentInjectRequest, AgentSendRequest } from '../shared/types/agent-send'
+import type { AgentInjectRequest, AgentInjectResult, AgentSendRequest } from '../shared/types/agent-send'
 import type { Thought, TranscriptPage } from '../shared/types/transcript'
 import type { ArtifactChangeBatchEvent, FileQueryResult, ResolvedArtifactPath } from '../shared/types/artifact'
 import type { MemoryPressureEvent } from '../shared/types/memory-pressure'
@@ -60,6 +60,8 @@ import { skillsRpc } from '../shared/rpc/contracts/skills.contract'
 import { TEAM_IPC, TEAM_EVENTS } from '../shared/apps/team-types'
 import type {
   CreateTeamInput,
+  TeamListNativeTasksInput,
+  TeamNativeTaskPage,
   UpdateTeamInput,
   TeamMemberInput,
   UpdateTeamMemberInput,
@@ -234,7 +236,7 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   testMcpConnections: () => Promise<{ success: boolean; servers: unknown[]; error?: string }>
   probeMcpApp: (appId: string) => Promise<{ success: boolean; result?: unknown; error?: string }>
   answerQuestion: (data: { conversationId: string; id: string; answers: Record<string, string> }) => Promise<IpcResponse>
-  injectMessage: (data: AgentInjectRequest) => Promise<IpcResponse>
+  injectMessage: (data: AgentInjectRequest) => Promise<IpcResponse<AgentInjectResult>>
   getEngineCapabilities: (engineId?: EngineId) => Promise<IpcResponse>
   getEngineAvailability: () => Promise<IpcResponse>
   listToolsets: (data: { spaceId: string; conversationId: string }) => Promise<IpcResponse>
@@ -645,7 +647,7 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   appChatSend: (request: { appId: string; spaceId: string; message: string; images?: ImageAttachment[]; thinkingEnabled?: boolean; reasoningEffort?: ReasoningEffortLevel; canvasContext?: CanvasContext; references?: ContentReference[]; conversationId?: string; teamContext?: unknown }) => Promise<IpcResponse<{ conversationId: string }>>
   appChatStop: (appId: string, conversationId?: string) => Promise<IpcResponse>
   // Add a message to the running turn; delivered:false when no turn was in flight
-  appChatInject: (input: { appId: string; conversationId: string; message: string; references?: ContentReference[] }) => Promise<IpcResponse<{ delivered: boolean; stopped?: boolean }>>
+  appChatInject: (input: AppChatInjectRequest) => Promise<IpcResponse<{ delivered: boolean; stopped?: boolean }>>
   appChatStatus: (appId: string, conversationId?: string) => Promise<IpcResponse<{ isGenerating: boolean; conversationId: string }>>
   appChatMessages: (input: { appId: string; spaceId: string; conversationId?: string }) => Promise<IpcResponse<import('../shared/types/transcript').TranscriptMessage[]> & import('../shared/apps/app-types').AppChatEngineMetadata>
   // Paged read, newest page first; messages carry thoughts:null (see appChatMessageThoughts)
@@ -740,6 +742,7 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   /** Stop a member's running turn, wherever that member runs. */
   teamStopMember: (input: { teamId: string; appId: string; epochId: string }) => Promise<IpcResponse>
   /** Conversations (office-shared session objects). */
+  teamListNativeTasks: (input: TeamListNativeTasksInput) => Promise<IpcResponse<TeamNativeTaskPage>>
   teamListConversations: (teamId: string) => Promise<IpcResponse>
   teamOpenConversation: (input: { teamId: string; title?: string; memberAppId?: string }) => Promise<IpcResponse>
   teamRenameConversation: (input: { teamId: string; epochId: string; title: string | null }) => Promise<IpcResponse>
@@ -1168,6 +1171,7 @@ const api: HaloAPI = {
   teamLeaveOffice: (input) => ipcRenderer.invoke(TEAM_IPC.leaveOffice, input),
   teamSendToMember: (input) => ipcRenderer.invoke(TEAM_IPC.sendToMember, input),
   teamStopMember: (input) => ipcRenderer.invoke(TEAM_IPC.stopMember, input),
+  teamListNativeTasks: (input) => ipcRenderer.invoke(TEAM_IPC.listNativeTasks, input),
   teamListConversations: (teamId) => ipcRenderer.invoke(TEAM_IPC.listConversations, teamId),
   teamOpenConversation: (input) => ipcRenderer.invoke(TEAM_IPC.openConversation, input),
   teamRenameConversation: (input) => ipcRenderer.invoke(TEAM_IPC.renameConversation, input),

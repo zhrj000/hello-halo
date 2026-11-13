@@ -238,7 +238,15 @@ reconnect or election.
   rows the manager's cache-first `fetchMemberHistory` reads, so history opens
   locally); only the node that SERVES (the office authority) also keeps the
   verbatim mirror row, because it alone serves feeds onward (joiner↔joiner
-  replication over the star). A node elected later starts its mirror mid-feed
+  replication over the star). Rows of a running turn are provisional: the
+  transcript reader places what arrived during a turn after its reply, so a
+  published row can move to another seq or change until the turn ends. The
+  publisher withholds the trailing reply while the turn runs, and when it ends
+  appends same-seq revisions for every row it published during the turn that
+  changed; consumers upsert by message seq. A turn that ends with fewer rows than
+  it published is not expressible this way, so the cache-first read reconciles
+  with the owner from the cached last reply on (rewriting rows that differ,
+  dropping rows the owner no longer has) after serving the local copy. A node elected later starts its mirror mid-feed
   and announces that floor (`truncatedBeforeSeq`), so a consumer behind it skips
   ahead; the hole this leaves in its history copy is detected by the cache-first
   read and filled from the owner. History is guaranteed readable while the

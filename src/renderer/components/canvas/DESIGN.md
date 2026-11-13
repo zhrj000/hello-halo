@@ -59,9 +59,10 @@ latter for atomic temp+rename writers; `resync` = every file tab):
 
 A row of a reference chip's list (or a `path:line` link in a reply) asks a tab
 to show a place through `TabState.reveal` — a one-shot `RevealRequest { seq,
-range?, quote?, passage?, keepFocus?, commentId?, path?, side?, page? }` set by
-`openFile(path, { reveal })`, `openTerminal(sessionId, title, { reveal })`,
-`openChanges(source, { reveal })` or `revealInTab(tabId, target)`. `keepFocus`
+range?, quote?, passage?, keepFocus?, commentId?, path?, side?, page?,
+activityId?, memberAppId? }` set by `openFile(path, { reveal })`,
+`openTerminal(sessionId, title, { reveal })`, `openChanges(source, { reveal })`,
+`openTeamTask(task, title, { reveal })` or `revealInTab(tabId, target)`. `keepFocus`
 means the request came from the composer: the viewer shows the place without
 taking keyboard focus. `commentId` means a pending comment was gone back to in
 order to edit it: its card there takes the focus instead — pass it to
@@ -191,6 +192,45 @@ as diffs. `openChanges(source, { reveal })` keeps one tab per source:
   count is kept for the view's lifetime (`ChangedSinceCounter`), so coming back
   shows the last one at once. Report links to files of the list open a detail
   page walked through the files the report names; Esc returns to the link.
+
+## Team progress view
+
+The `team-task` content type (`viewers/TeamTaskViewer.tsx`) shows one team
+conversation's work beside the homepage chat, which no longer opens a drawer
+for it. `openTeamTask(task, title, { reveal })` keeps one tab per team + epoch
+and re-titles it on reuse. The progress (`components/team/TeamTaskProgress.tsx`)
+reads the board itself (`useTaskBoard`), so it does not depend on the chat
+staying mounted. It opens on one overview (`TeamTaskOverview.tsx`) headed by the
+task: the team as one line of context above it (its name, or "Temporary team" with
+the keep action, and who is in it), the task title as the page heading, its status
+and subtask count, and a brief card that names only what needs the user — then
+subtasks grouped by status (`workbench/subtasks.ts`), the outputs newest first, one
+line each (five, the rest unfolding in place) and a link to the collaboration
+record. Once every subtask is settled the groups give way to a plain list under
+the strip. Every subtask, whatever its state, switches the chat to its assignee in
+this conversation, as picking them in the member selector would. A temporary team's
+member opens in place of the chat of the conversation that leads it
+(`collab-member-view.store`); on a machine without that conversation it opens the
+member's execution here instead. The collaboration record and members are subpages one step away.
+The work reads as done once it was ended as done (`finishedAt`, or archived) or
+every subtask is done or rejected with nobody still working, waiting or failed
+(`taskProgress().finished`); a new message or subtask turns it back to in progress.
+Once done, the outputs move up under the brief, since they are what the reader came
+for. The brief then adds only what the status line does not say: the closing summary
+when the work was ended, rejected subtasks, how much of the time shown was waiting on
+people, and that there are no outputs; with none of these it is left out. Outputs
+still loading or failing to load show as such, never as none.
+The members page lists the whole roster, each with its concrete work here (the
+task in hand or next, what it finished, the work it split out); members outside
+this conversation are listed last; the others switch the chat to them, as a subtask
+does.
+`reveal.activityId` opens the collaboration record at that record;
+`reveal.memberAppId` opens that member's execution. The page, subtask groups
+opened or closed against their default, and open member execution are kept in
+`tab.view.teamTask`, so returning to the tab lands there again. Its outputs open as canvas
+tabs (`openFile` on the resolved local copy, so binaries still go to the system
+application); the team workbench drawer keeps opening them in the system
+application.
 
 ## Browser page lifetime and presentation
 

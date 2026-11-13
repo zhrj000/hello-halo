@@ -362,8 +362,9 @@ export interface OrchestrationDeps {
    */
   hasPendingEscalation?: (appId: string, teamId: string, epochId?: string) => boolean
   /**
-   * Human name of an IM chatKey (IM session registry lookup), used when
-   * labeling a conversation a member is busy with. Absent → raw chat id.
+   * Human name of an IM chatKey (IM session registry lookup) or a collaboration
+   * room (its space conversation's title), used when labeling a conversation a
+   * member is busy with. Absent → raw chat id / the room's stored title.
    */
   describeChatKey?: (teamId: string, chatKey: string) => string | null
   /**

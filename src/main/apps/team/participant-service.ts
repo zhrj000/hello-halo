@@ -3,7 +3,7 @@ import { mkdir, rm } from 'fs/promises'
 import { join } from 'path'
 import { CollaborationRefusal, type MessageBus, type SpawnInput } from '@hello-halo/agent-sdk/collaboration'
 import { openMemberWorkspace, releaseMemberWorkspace, remapWorkspaceDeniedRoots } from '@hello-halo/agent-sdk/collaboration/workspaces'
-import { buildTeamSessionKey, isRemoteMember, parseSpaceCoordinatorAppId, type TeamParticipant, type TeamRequestOrigin, type TeamStopController } from '../../../shared/apps/team-types'
+import { buildTeamSessionKey, isRemoteMember, parseSpaceCoordinatorAppId, temporaryMemberHandle, type TeamParticipant, type TeamRequestOrigin, type TeamStopController } from '../../../shared/apps/team-types'
 import type { TeamStore } from './types'
 import type { RecipientAddress } from './recipient-fences'
 import type { ParticipantExecution } from './participants'
@@ -208,7 +208,7 @@ export function createParticipantService(deps: {
       store.requests.inherit(sourceOf(caller), memberRequest)
       const id = randomUUID()
       if (store.participants.getById(id) || deps.identityExists?.(id)) fail('identity_collision', 'The collaborator identity is already in use. No workspace was created.', caller)
-      const name = `${input.name?.trim() || 'collaborator'}-${id.slice(0, 8)}`
+      const name = temporaryMemberHandle(input.name?.trim() || 'collaborator', id)
       const member: TeamParticipant = {
         teamId: caller.teamId, epochId: caller.epochId, appId: id, parentAppId: caller.callerAppId,
         memberName: name, role: input.name?.trim() || 'Collaborator',

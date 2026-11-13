@@ -6,7 +6,7 @@
 
 import { useEffect, useState, useMemo, useRef } from 'react'
 import { parseTodoInput } from '../../utils/thought-activity'
-import { ArrivalCard } from './ArrivalCard'
+import { TrailingArrivals } from './ArrivalCard'
 import { mergeArrivalThoughts, toArrivalThought } from './transcript'
 import { ThoughtPanel, ThoughtPanelHeader } from './ThoughtPanel'
 import { SkillNotice } from './SkillNotice'
@@ -105,11 +105,7 @@ export function LazyCollapsedThoughtProcess({ thoughtsSummary, onLoadThoughts, a
         isLoading={isLoading}
         unavailable={unavailable}
       />
-      {unavailable && arrivals?.map(message => (
-        <div key={message.clientKey ?? message.id} className="mt-2">
-          <ArrivalCard message={message} />
-        </div>
-      ))}
+      {unavailable && arrivals?.length ? <TrailingArrivals arrivals={arrivals} lineGapClassName="mt-2" /> : null}
     </div>
   )
 }

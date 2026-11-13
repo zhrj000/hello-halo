@@ -59,7 +59,7 @@ import { captureToolsetExecutionOptions, isCollaborationEnabled, emitHumanReques
 import type { CanvasContext } from '../../services/agent/types'
 import type { ContentReference } from '../../../shared/types/content-reference'
 import { messageSummaryText } from '../../../shared/content-reference'
-import { prepareNonVisionImageFallback } from '../../services/agent/image-attachments'
+import { modelAcceptsImages, prepareNonVisionImageFallback } from '../../services/agent/image-attachments'
 import {
   closeV2Session,
   getConsumerHandle,
@@ -1392,10 +1392,22 @@ async function runAppChatTurn(
       ? resolveParticipantExecution(participantStore, manager, teamContext.teamId, teamContext.epochId, appId)?.app : null)
     return !!current && !!isImEnvelopeCurrent() && permissionEnvelope(current) === configurationAtStart
   }, (text, liveImages) => {
+    const imageCount = liveImages?.length ?? 0
+    const needsFallback = imageCount > 0 && !modelAcceptsImages(credentials)
+    const refusal = needsFallback && (applied?.enforced
+      ? 'permission boundary enforced'
+      : !v2Sessions.get(conversationId)?.imageInput?.ocrAvailable ? 'session OCR unavailable' : undefined)
+    if (refusal) {
+      console.warn(`[AppChat] Live image addition refused: conversation=${conversationId} reason=${refusal}`)
+      return false
+    }
     const fallback = prepareNonVisionImageFallback({
       scope: { spaceId, conversationId, workDir }, credentials, images: liveImages,
     })
-    if (applied?.enforced && fallback?.filePaths.length) return false
+    if (needsFallback && (!fallback || fallback.filePaths.length !== imageCount)) {
+      console.warn(`[AppChat] Live image addition refused: conversation=${conversationId} reason=incomplete image preparation`)
+      return false
+    }
     const input = (fallback?.contextBlock ?? '') + text
     return { text: applied?.enforced ? inertCommandText(input) : input, images: fallback ? undefined : liveImages }
   })

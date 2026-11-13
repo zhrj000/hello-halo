@@ -395,7 +395,7 @@ export interface CreateTeamRuntimeDeps {
    * survives a run seal and a restart (P0-5). Absent → in-memory only.
    */
   hasPendingEscalation?: (appId: string, teamId: string, epochId?: string) => boolean
-  /** Human name for an IM chatKey (IM session registry). Absent → raw chat id. */
+  /** Human name for an IM chatKey or a collaboration room (see orchestration deps). */
   describeChatKey?: (teamId: string, chatKey: string) => string | null
   /**
    * The digital human's own description, read from the app record so the roster

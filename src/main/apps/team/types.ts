@@ -272,6 +272,16 @@ export interface TaskPatch {
   note?: string | null
 }
 
+/** Narrows a native task listing to the work that concerns one viewer. */
+export interface NativeTaskScope {
+  /** Viewer identity stamped on `task_created_by`; null when unknown. */
+  viewer: string | null
+  /** Tasks the viewer only took part in count when active at or after this time (ms). */
+  involvedSince: number
+  /** Tasks a decision is waiting on the viewer for. */
+  attentionEpochIds: string[]
+}
+
 // ── TeamStore Interface ──
 
 /**
@@ -423,7 +433,8 @@ export interface TeamStore {
   /** Acts of an epoch created strictly after `sinceCreatedAt`, oldest first. */
   listActivityByEpochSince(teamId: string, epochId: string, sinceCreatedAt: number): TeamActivity[]
   /** Every act of a team, across epochs — the replication snapshot's source. */
-  getConversationStats(teamId: string, ownAppIds: string[]): {
+  listNativeTaskEpochs(spaceId: string, localAppIds: string[], limit: number, cursor?: { at: number; id: string }, epochIds?: string[], scope?: NativeTaskScope): TeamEpoch[]
+  getConversationStats(teamId: string, ownAppIds: string[], epochIds?: string[], includeOutputs?: boolean): {
     involved: Set<string>
     outputCounts: Map<string, number>
     unansweredDecisionMembers: Map<string, string[]>

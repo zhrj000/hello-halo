@@ -691,6 +691,232 @@ html.platform-desktop body::after {
   animation: composer-rise var(--dur) var(--ease);
 }
 
+/* Team conversation member rail (TaskMemberSelector): a lifted thumb slides to the
+   selected member, whose name unfolds; neighbours of a hovered avatar magnify slightly. */
+.member-rail {
+  --member-rail-bg: color-mix(in srgb, hsl(var(--secondary)) 50%, hsl(var(--background)));
+  background: var(--member-rail-bg);
+}
+
+.theme-dark .member-rail {
+  --member-rail-bg: hsl(var(--card) / .86);
+}
+
+.member-rail-thumb {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 0;
+  opacity: 0;
+  border-radius: 9999px;
+  pointer-events: none;
+  background: hsl(var(--popover));
+  box-shadow: 0 1px 2px hsl(var(--foreground) / .08), 0 3px 10px -3px hsl(var(--foreground) / .16);
+}
+
+.theme-dark .member-rail-thumb {
+  background: hsl(var(--foreground) / .15);
+  box-shadow: 0 1px 2px hsl(var(--background) / .5), 0 3px 10px -3px hsl(var(--background) / .6);
+}
+
+.member-rail-item {
+  transition: padding 280ms var(--ease);
+}
+
+.member-rail-item[aria-pressed="true"] {
+  padding-right: 13px;
+  cursor: default;
+}
+
+.member-rail-avatar {
+  transition: transform 220ms cubic-bezier(.34, 1.4, .5, 1);
+}
+
+.member-rail-item {
+  --avatar-dot-ring: var(--member-rail-bg);
+}
+
+.theme-dark .member-rail-item {
+  --avatar-dot-ring: hsl(var(--card));
+}
+
+.member-rail-item[aria-pressed="true"],
+[data-member-panel] {
+  --avatar-dot-ring: hsl(var(--popover));
+}
+
+/* A member's state at the corner of its avatar, sized as a share of the avatar so
+   it keeps one proportion at every size; the ring takes the surface behind it. */
+.avatar-status-dot {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 25%;
+  height: 25%;
+  border-radius: 9999px;
+  background: hsl(var(--primary));
+  box-shadow: 0 0 0 1.5px var(--avatar-dot-ring, hsl(var(--background)));
+}
+
+.avatar-status-dot[data-tone="waiting"] {
+  background: hsl(var(--halo-warning));
+}
+
+.avatar-status-dot[data-tone="failed"] {
+  background: hsl(var(--destructive));
+}
+
+.avatar-status-dot[data-tone="done"] {
+  background: hsl(var(--halo-success));
+}
+
+/* Read-only: a light veil with a lock over the face; the status dot is drawn after it
+   so it stays on top. */
+.avatar-lock-badge {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  background: rgb(0 0 0 / .28);
+  color: #fff;
+}
+
+.avatar-lock-badge svg {
+  width: 46%;
+  height: 46%;
+  filter: drop-shadow(0 1px 1px rgb(0 0 0 / .25));
+}
+
+.member-rail-name {
+  max-width: 0;
+  margin-left: 0;
+  opacity: 0;
+  white-space: nowrap;
+  transition: max-width 320ms var(--ease), opacity 220ms var(--ease), margin 320ms var(--ease);
+}
+
+.member-rail-item[aria-pressed="true"] .member-rail-name {
+  max-width: 112px;
+  margin-left: 8px;
+  opacity: 1;
+}
+
+@media (min-width: 640px) {
+  .member-rail-item[aria-pressed="true"] .member-rail-name {
+    max-width: 160px;
+  }
+}
+
+.member-rail-tip {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  z-index: 10;
+  padding: 6px 9px;
+  border-radius: 8px;
+  background: hsl(var(--foreground));
+  color: hsl(var(--background));
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(var(--tip-x, -50%), 4px);
+  transition: opacity 140ms, transform 180ms var(--ease);
+}
+
+/* A member's card opens from the bar's left edge, like the members panel, so it
+   never runs off the composer whichever avatar is hovered. */
+.member-rail-tip[data-card] {
+  --tip-x: 0px;
+  --avatar-dot-ring: hsl(var(--popover));
+  left: 0;
+  width: 280px;
+  max-width: calc(100vw - 32px);
+  padding: 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: 14px;
+  background: hsl(var(--popover));
+  color: hsl(var(--popover-foreground));
+  box-shadow: var(--shadow-pop);
+  line-height: 1.45;
+  text-align: left;
+  white-space: normal;
+}
+
+/* The rail starts at the column edge, so its first tip opens rightward. */
+.member-rail-item:first-of-type .member-rail-tip {
+  left: 0;
+  --tip-x: 0px;
+}
+
+:is(.member-rail-item, .member-rail-more, .member-rail-status):focus-visible .member-rail-tip {
+  opacity: 1;
+  transform: translate(var(--tip-x, -50%), 0);
+}
+
+@media (hover: hover) {
+  :is(.member-rail-item, .member-rail-more, .member-rail-status):hover .member-rail-tip {
+    opacity: 1;
+    transform: translate(var(--tip-x, -50%), 0);
+  }
+
+  .member-rail-item:not([aria-pressed="true"]):hover .member-rail-avatar {
+    transform: scale(1.22) translateY(-2px);
+  }
+
+  .member-rail-item:not([aria-pressed="true"]):has(+ .member-rail-item:not([aria-pressed="true"]):hover) .member-rail-avatar,
+  .member-rail-item:not([aria-pressed="true"]):hover + .member-rail-item:not([aria-pressed="true"]) .member-rail-avatar {
+    transform: scale(1.08);
+  }
+}
+
+@keyframes member-rail-enter {
+  from { opacity: 0; transform: scale(.4); }
+  to { opacity: 1; transform: none; }
+}
+
+.animate-member-rail-enter {
+  animation: member-rail-enter 420ms cubic-bezier(.34, 1.4, .5, 1);
+}
+
+@keyframes member-panel-in {
+  from { opacity: 0; transform: translateY(6px) scale(.97); }
+  to { opacity: 1; transform: none; }
+}
+
+.animate-member-panel-in {
+  animation: member-panel-in 200ms cubic-bezier(.34, 1.4, .5, 1);
+}
+
+/* A member switch replaces the whole transcript; it settles in rather than snapping. */
+@keyframes member-swap {
+  from { opacity: 0; transform: translateY(6px); filter: blur(2px); }
+  to { opacity: 1; transform: none; filter: none; }
+}
+
+.animate-member-swap {
+  animation: member-swap 220ms var(--ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .member-rail-item,
+  .member-rail-avatar,
+  .member-rail-name,
+  .member-rail-tip {
+    transition: none;
+  }
+
+  .animate-member-rail-enter,
+  .animate-member-panel-in,
+  .animate-member-swap {
+    animation: none;
+  }
+}
+
 /* A row the AI asked the user to look at: one soft wash that fades out. */
 @keyframes composer-attention {
   0%, 30% {

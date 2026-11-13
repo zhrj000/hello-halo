@@ -45,6 +45,7 @@ export const CONTENT_TYPES = [
   'browser',
   'terminal',
   'team',
+  'team-task',
   'goal',
   'changes',
 ] as const
@@ -78,6 +79,16 @@ export interface TabViewState {
   scrollPosition?: number
   /** Where a changes tab was left; owned by the changes viewer. */
   changes?: ChangesViewMemory
+  /** Where a team progress tab was left; owned by the team progress viewer. */
+  teamTask?: TeamTaskViewMemory
+}
+
+export interface TeamTaskViewMemory {
+  section?: 'overview' | 'history' | 'members'
+  /** Subtask groups opened or closed against their default, by group id. */
+  open?: Record<string, boolean>
+  /** The member whose execution was open. */
+  memberAppId?: string
 }
 
 /**
@@ -116,6 +127,9 @@ export interface RevealRequest {
   side?: 'before' | 'after'
   /** Changes view only: the sub-page to show. */
   page?: 'overview'
+  /** Team task view only: a team record to show, or the member whose work to show. */
+  activityId?: string
+  memberAppId?: string
 }
 
 export type RevealTarget = Omit<RevealRequest, 'seq'>
@@ -171,6 +185,8 @@ export interface TabState {
   terminalSessionId?: string // For terminal tabs - the pty session id
   /** Persistent Halo team rendered by the Team workbench. */
   teamId?: string
+  /** One task (conversation) of a team whose progress the team task view shows. */
+  teamTask?: { spaceId: string; teamId: string; epochId: string }
   /** Conversation whose goal the goal editor edits. */
   goal?: { spaceId: string; conversationId: string }
   /** What a changes tab shows. */
@@ -985,6 +1001,34 @@ class CanvasLifecycle {
       type: 'team',
       title: title || i18n.t('Team'),
       teamId,
+      isDirty: false,
+      isLoading: false,
+    }
+
+    this.addTab(tab)
+    await this.switchTab(tabId)
+    return tabId
+  }
+
+  /** Open the progress of one team task, reusing its tab if one is open. */
+  async openTeamTask(task: { spaceId: string; teamId: string; epochId: string }, title: string, options: { reveal?: RevealTarget } = {}): Promise<string> {
+    const reveal = options.reveal ? this.createRevealRequest(options.reveal) : undefined
+    for (const [tabId, tab] of this.tabs) {
+      if (tab.type === 'team-task' && tab.teamTask?.teamId === task.teamId && tab.teamTask.epochId === task.epochId) {
+        this.patchTab(tabId, { title, ...(reveal ? { reveal } : {}) })
+        this.setOpen(true)
+        await this.switchTab(tabId)
+        return tabId
+      }
+    }
+
+    const tabId = generateTabId()
+    const tab: NewTab = {
+      id: tabId,
+      type: 'team-task',
+      title,
+      teamTask: task,
+      reveal,
       isDirty: false,
       isLoading: false,
     }

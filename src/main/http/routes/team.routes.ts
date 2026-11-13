@@ -1,5 +1,7 @@
 /** Digital Team REST API routes. Thin delegation to TeamService. */
-import type { Express, Request, Response } from 'express'
+import type { Express, Request as ExpressRequest, Response } from 'express'
+
+type Request = ExpressRequest<Record<string, string>>
 import { getTeamService, getTeamStore, workMemberPrincipalId } from '../../apps/team'
 import { readTeamMemberHistory } from '../../apps/runtime/app-chat'
 import { getOfficeCredential } from '../auth/middleware'
@@ -192,6 +194,52 @@ export function registerTeamRoutes(app: Express, options: { assistant?: boolean 
       const spaceId = typeof req.query.spaceId === 'string' && req.query.spaceId ? req.query.spaceId : undefined
       res.json({ success: true, data: service.listTeamItems(spaceId) })
     } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  app.get('/api/teams/native-tasks', async (req: Request, res: Response) => {
+    if (getOfficeCredential(req)) {
+      console.warn('[TeamRoutes] Homepage task listing refused for office-scoped credentials')
+      res.status(403).json({ success: false, error: 'Forbidden' })
+      return
+    }
+    try {
+      const service = getServiceOrFail(res)
+      if (!service) return
+      const { spaceId, limit, cursor, epochIds, scope } = req.query
+      if (typeof spaceId !== 'string' || (limit !== undefined && typeof limit !== 'string') ||
+          (cursor !== undefined && typeof cursor !== 'string') ||
+          (epochIds !== undefined && typeof epochIds !== 'string') ||
+          (scope !== undefined && scope !== 'mine')) {
+        console.warn('[TeamRoutes] Homepage task listing refused: invalid query shape')
+        res.status(400).json({ success: false, error: 'Invalid native task query' })
+        return
+      }
+      let parsedEpochIds: string[] | undefined
+      if (epochIds !== undefined) {
+        try {
+          const parsed: unknown = JSON.parse(epochIds as string)
+          if (!Array.isArray(parsed) || parsed.length > 100 ||
+              parsed.some(id => typeof id !== 'string' || !id.trim()) || cursor !== undefined) {
+            throw new Error('Invalid epochIds')
+          }
+          parsedEpochIds = parsed
+        } catch {
+          console.warn('[TeamRoutes] Homepage task listing refused: invalid epochIds query')
+          res.status(400).json({ success: false, error: 'Invalid native task epochIds query' })
+          return
+        }
+      }
+      res.json({ success: true, data: service.listNativeTasks({
+        spaceId,
+        ...(parsedEpochIds !== undefined ? { epochIds: parsedEpochIds } : {}),
+        ...(limit !== undefined ? { limit: Number(limit) } : {}),
+        ...(cursor !== undefined ? { cursor } : {}),
+        ...(scope === 'mine' ? { scope } : {}),
+      }) })
+    } catch (error) {
+      console.warn('[TeamRoutes] native task listing failed:', error)
       res.json({ success: false, error: (error as Error).message })
     }
   })

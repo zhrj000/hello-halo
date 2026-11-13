@@ -42,7 +42,7 @@ import { registerPerfHandlers } from '../ipc/perf'
 import { registerGitBashHandlers, initializeGitBashOnStartup } from '../ipc/git-bash'
 import { cleanupAllCaches } from '../services/artifact-cache.service'
 import { flushSpaceActivity } from '../services/space.service'
-import { onConversationDeleted, isConversationGone, deleteEphemeralConversations } from '../services/conversation.service'
+import { onConversationDeleted, isConversationGone, deleteEphemeralConversations, getConversation } from '../services/conversation.service'
 import { disposeSearchContext } from '../services/web-search'
 import {
   initConversationInterop,
@@ -84,7 +84,7 @@ import { getRemoteAccessStatus } from '../services/remote'
 import type { OwnerStatus, MemberWriteRecord, ArtifactRef } from '../apps/runtime/federation'
 import { SELF_NODE_ID, TEAM_EVENTS, buildTeamSessionKey } from '../../shared/apps/team-types'
 import type { BlackboardTask, BlackboardFinding, TaskStatus, TeamActivity, TeamUpdatedEvent, TeamEpoch, TeamCheck, TeamOfficeStatusKind, TeamVersionMismatch } from '../../shared/apps/team-types'
-import { parseTeamSessionKey, parseTeamChatKey, nativeChatAppId, isSpaceConversationId } from '../../shared/apps/im-keys'
+import { parseTeamSessionKey, parseTeamChatKey, parseSpaceCollabChatKey, nativeChatAppId, isSpaceConversationId } from '../../shared/apps/im-keys'
 import { disposeJoinedOfficeWork, createTeamRuntime, setActiveTeamRuntime, getActiveTeamRuntime, releaseTeamMailOnTurnStart, createTeamTriggerScheduler, createDefaultSessionDeps, createTeamArtifactReader, createTeamMemberRecordReader, createTeamArtifactOpener, createLocalArtifactResolver, createLocalArtifactPathResolver, createMemberWorkDirResolver, RemoteArtifactError, pruneSharedFileCopies, defaultSharedCopyRoot, teamFolderDir, registerCollaborationLifecycle, deliverOwnedCollaborationSource, observeOwnedCollaborationSources } from '../apps/runtime/team'
 import { readTeamMemberMessages, isAppChatConversationGenerating, sendAppChatMessage } from '../apps/runtime/app-chat'
 import type { TeamTriggerScheduler } from '../apps/runtime/team'
@@ -540,7 +540,7 @@ async function initPlatformAndApps(): Promise<void> {
       // Owner-side transcript serialization, shared by the pull path
       // (readMemberHistory) and the proactive session-feed replication
       // (readOwnedTranscript) so both surfaces always agree. seq is the 1-based
-      // ordinal in the append-only transcript — stable across reads, so viewers
+      // ordinal in the transcript, stable once a turn ends, so viewers
       // pull/replicate only the tail. Carries the thoughts/tool trace so a remote
       // viewer's backfill shows the same thinking the live relay did.
       const serializeTeamTranscript = (teamId: string, appId: string, epochId: string, sinceSeq?: number) => {
@@ -1016,8 +1016,15 @@ async function initPlatformAndApps(): Promise<void> {
 
     // Human name for an IM chatKey ("{instanceId}:{chatType}:{chatId}"): resolve
     // the running IM instance + session so a conversation labels as the chat's
-    // real name, not a raw id. Null for native / member chatKeys.
+    // real name, not a raw id. A collaboration room names itself after its space
+    // conversation. Null for native / member chatKeys.
     const describeTeamChatKey = (teamId: string, chatKey: string): string | null => {
+      const collabConversationId = parseSpaceCollabChatKey(chatKey)
+      if (collabConversationId !== null) {
+        const spaceId = teamStore.getTeamById(teamId)?.owningSpaceId
+        if (!spaceId || !isSpaceConversationId(collabConversationId)) return null
+        return getConversation(spaceId, collabConversationId)?.title?.trim() || null
+      }
       const parsed = parseTeamChatKey(chatKey)
       if (!parsed) return null
       const lead = teamStore.getTeamById(teamId)?.leadAppId

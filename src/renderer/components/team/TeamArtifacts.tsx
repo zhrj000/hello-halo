@@ -1,5 +1,6 @@
 /**
- * A run's shared files, and opening one with the system default application.
+ * A run's shared files, and opening one through the caller's opener (the
+ * canvas) or else with the system default application.
  *
  * Files are opened by the reference they were published under, never by the
  * path in the listing: that path is resolved against THIS machine, while a file
@@ -14,6 +15,9 @@ import { downloadArtifact } from '../../services/artifact-download'
 import { useTranslation } from '../../i18n'
 import { useNotificationStore } from '../../stores/notification.store'
 import type { TeamArtifactOpenFailure } from '../../../shared/apps/team-types'
+
+/** Opens a resolved local copy, e.g. in the canvas, which hands binaries to the system application itself. */
+export type OpenOutput = (path: string, title: string) => void
 
 function baseName(p: string): string {
   const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))
@@ -50,7 +54,8 @@ export type ArtifactStatus = 'loading' | 'ready' | 'failed'
 export function useTeamArtifacts(
   teamId: string,
   epochId: string | null | undefined,
-  refreshToken?: string | number
+  refreshToken?: string | number,
+  openInCanvas?: OpenOutput
 ) {
   // basename/ref → the entry it addresses, for callers holding only a ref.
   const [byRef, setByRef] = useState<Map<string, ArtifactEntry>>(new Map())
@@ -170,12 +175,13 @@ export function useTeamArtifacts(
         notify(t('This file could run a program, so it is shown in its folder instead of being opened.'), 'default')
         return
       }
-      void api.openArtifact(result.path)
+      if (openInCanvas) openInCanvas(result.path, entry.name)
+      else void api.openArtifact(result.path)
     } catch (err) {
       console.warn('[TeamArtifacts] open failed', { teamId, ref: entry.ref, err })
       notify(describeFailure('error', null), 'error')
     }
-  }, [teamId, describeFailure, notify, t])
+  }, [teamId, describeFailure, notify, t, openInCanvas])
 
   const open = useCallback((ref: string) => {
     const entry = byRef.get(ref) ?? byRef.get(baseName(ref))

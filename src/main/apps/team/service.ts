@@ -37,7 +37,7 @@ import type { AutomationSpec } from '../../../shared/apps/spec-types'
 import type { Artifact } from '../../services/artifact.service'
 import type { ImageAttachment } from '../../../shared/types/image-attachment'
 import type { AgentModelSelection } from '../../../shared/types/ai-sources'
-import type { TeamStore } from './types'
+import type { TeamStore, NativeTaskScope } from './types'
 import type {
   CollabSummary,
   Team,
@@ -62,6 +62,8 @@ import type {
   TeamArtifactOpenResult,
   TeamArtifact,
   TeamConversation,
+  TeamListNativeTasksInput,
+  TeamNativeTaskPage,
   TeamPendingEscalation,
   RosterMember,
   UpdateTeamMemberInput,
@@ -76,6 +78,9 @@ import { capabilityPolicyFromPreset } from '../../../shared/apps/capability-poli
 import { parseSpaceCollabChatKey, parseTeamSessionKey } from '../../../shared/apps/im-keys'
 
 const LOG_TAG = '[TeamService]'
+
+/** How recently a task someone else started must have moved to still concern the viewer. */
+const NATIVE_TASK_INVOLVED_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
 
 class LegacyTeamBusyError extends Error {}
 
@@ -155,8 +160,9 @@ export interface TeamServiceDeps {
    */
   getPendingEscalations?: () => PendingEscalationRecord[]
   /**
-   * Human name for an IM chatKey (IM session registry), used when labeling an IM
-   * conversation. Absent → the raw chat id is shown.
+   * Human name for an IM chatKey (IM session registry) or a collaboration room
+   * (the space conversation's title), used when labeling a conversation.
+   * Absent → the raw chat id / the room's stored title is shown.
    */
   describeChatKey?: (teamId: string, chatKey: string) => string | null
 }
@@ -324,6 +330,8 @@ export interface TeamService {
   // ── Conversations (office-shared session objects) ──
   /** Every open conversation of this office, newest first (P0-1: office-wide consistent). */
   listConversations(teamId: string): TeamConversation[]
+  /** Bounded space homepage summaries; never loads transcripts or artifact counts. */
+  listNativeTasks(input: TeamListNativeTasksInput): TeamNativeTaskPage
   /**
    * Open a brand-new native team conversation ("New session") — a fresh,
    * independent context whose input target is the team lead (front-desk mode).
@@ -1942,9 +1950,69 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
 
   function listConversations(teamId: string): TeamConversation[] {
     const team = requireTeam(teamId)
-    const openEpochs = store.listEpochsByTeam(teamId)
-    if (openEpochs.length === 0) return []
+    return projectConversations(team, store.listEpochsByTeam(teamId))
+  }
 
+  function listNativeTasks(input: TeamListNativeTasksInput): TeamNativeTaskPage {
+    if (!input || typeof input.spaceId !== 'string' || !input.spaceId.trim()) throw new Error('spaceId is required')
+    if (input.limit !== undefined && (!Number.isInteger(input.limit) || input.limit < 1)) throw new Error('limit must be a positive integer')
+    if (input.epochIds !== undefined) {
+      if (!Array.isArray(input.epochIds) || input.epochIds.length > 100 ||
+          input.epochIds.some(id => typeof id !== 'string' || !id.trim())) {
+        throw new Error('epochIds must be an array of at most 100 nonempty strings')
+      }
+      if (input.cursor !== undefined) throw new Error('epochIds cannot be combined with cursor')
+    }
+    const limit = Math.min(input.limit ?? 30, 100)
+    let cursor: { at: number; id: string } | undefined
+    if (input.cursor !== undefined) {
+      try {
+        const parsed = JSON.parse(Buffer.from(input.cursor, 'base64url').toString('utf8'))
+        if (parsed.spaceId !== input.spaceId || !Number.isSafeInteger(parsed.at) || typeof parsed.id !== 'string' || !parsed.id) throw new Error('Invalid cursor')
+        cursor = { at: parsed.at, id: parsed.id }
+      } catch {
+        throw new Error('Invalid native task cursor')
+      }
+    }
+    if (input.scope !== undefined && input.scope !== 'mine') throw new Error('scope must be "mine"')
+    const appIds = appManager.listApps({ spaceId: input.spaceId }).map(app => app.id)
+    const pending = deps.getPendingEscalations?.() ?? []
+    const scope: NativeTaskScope | undefined = input.scope === 'mine' && input.epochIds === undefined
+      ? {
+          viewer: deps.getViewerIdentity?.() ?? null,
+          involvedSince: Date.now() - NATIVE_TASK_INVOLVED_WINDOW_MS,
+          attentionEpochIds: [...new Set(pending.filter(e => e.epochId && appIds.includes(e.appId)).map(e => e.epochId!))],
+        }
+      : undefined
+    const rows = store.listNativeTaskEpochs(input.spaceId, appIds, input.epochIds === undefined ? limit + 1 : limit, cursor, input.epochIds, scope)
+    const page = rows.slice(0, limit)
+    const byTeam = new Map<string, TeamEpoch[]>()
+    for (const epoch of page) byTeam.set(epoch.teamId, [...(byTeam.get(epoch.teamId) ?? []), epoch])
+    const projected = new Map<string, TeamNativeTaskPage['items'][number]>()
+    for (const [teamId, epochs] of byTeam) {
+      const team = requireTeam(teamId)
+      const members = new Map(store.listMembersByTeam(teamId).map(member => [member.appId, member]))
+      const byId = new Map(epochs.map(epoch => [epoch.id, epoch]))
+      for (const item of projectConversations(team, epochs, false, pending)) {
+        const entry = byId.get(item.epochId)?.workItem?.entryAppId
+        const entryMember = entry ? members.get(entry) : undefined
+        const startedBy = !item.createdByMe && entryMember && isRemoteMember(entryMember) ? entryMember.ownerDisplayName?.trim() : undefined
+        projected.set(item.epochId, { ...item, teamName: team.name, spaceId: input.spaceId, ...(startedBy ? { startedBy } : {}) })
+      }
+    }
+    const last = page.at(-1)
+    return {
+      items: page.map(epoch => projected.get(epoch.id)!),
+      nextCursor: input.epochIds === undefined && rows.length > limit && last
+        ? Buffer.from(JSON.stringify({ spaceId: input.spaceId, at: last.lastActivityAt ?? last.startedAt, id: last.id })).toString('base64url')
+        : null,
+    }
+  }
+
+  function projectConversations(team: Team, openEpochs: TeamEpoch[], includeOutputs = true, pending?: PendingEscalationRecord[]): TeamConversation[] {
+    if (openEpochs.length === 0) return []
+    const teamId = team.id
+    const selectedIds = new Set(openEpochs.map(epoch => epoch.id))
     const members = store.listMembersByTeam(teamId)
     // An epoch is "active" when some member is serving it right now. On the
     // AUTHORITY that reads local live sessions; on a JOINED (shadow) office the
@@ -1962,8 +2030,9 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       for (const b of busy) activeEpochIds.add(b.epochId)
     }
     const localWaitingMembers = new Map<string, string[]>()
-    for (const escalation of pendingEscalationsForTeam(teamId)) {
-      if (!escalation.epochId) continue
+    const memberIds = new Set(members.map(member => member.appId))
+    for (const escalation of pending ?? deps.getPendingEscalations?.() ?? []) {
+      if (escalation.teamId !== teamId || !memberIds.has(escalation.appId) || !escalation.epochId || !selectedIds.has(escalation.epochId)) continue
       localWaitingMembers.set(escalation.epochId, [
         ...(localWaitingMembers.get(escalation.epochId) ?? []),
         escalation.appId,
@@ -1971,7 +2040,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     }
 
     const ownIds = new Set(members.filter(m => !isRemoteMember(m)).map(m => m.appId))
-    const { involved, outputCounts, unansweredDecisionMembers } = store.getConversationStats(teamId, [...ownIds])
+    const { involved, outputCounts, unansweredDecisionMembers } = store.getConversationStats(teamId, [...ownIds], openEpochs.map(epoch => epoch.id), includeOutputs)
     const joinedStatuses = isJoined ? store.getJoinedMemberStatuses(teamId) : null
     const membersByAppId = new Map(members.map(member => [member.appId, member]))
     const memberOrder = new Map(members.map((member, index) => [member.appId, index]))
@@ -2004,12 +2073,13 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
           : {}),
         workItemId: epoch.workItem?.id ?? epoch.id,
         completed: epoch.workItem?.status === 'completed',
+        ...(epoch.endedAt !== null && epoch.endReason === 'completed' ? { finishedAt: epoch.endedAt } : {}),
         createdByMe: !!epoch.workItem?.createdBy && epoch.workItem.createdBy === deps.getViewerIdentity?.(),
         involvedMe: involved.has(epoch.id),
         triggerType: epoch.triggerType,
         summary: epoch.summary,
         artifactCount: outputCounts.get(epoch.id) ?? 0,
-        label: epoch.workItem?.title || (kind === 'run' ? team.name : deriveConversationLabel(store, epoch, deps.describeChatKey, members)),
+        label: (kind !== 'collab' && epoch.workItem?.title) || (kind === 'run' ? team.name : deriveConversationLabel(store, epoch, deps.describeChatKey, members)),
         // IM chats are answered in the IM app; native + member chats are writable here.
         readonly: kind === 'im' || kind === 'run' || isReadonlyCollaboration(team, epoch),
         ...(memberAppId ? { memberAppId } : {}),
@@ -2102,6 +2172,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     sendToMember,
     stopMember,
     listConversations,
+    listNativeTasks,
     openConversation,
     renameConversation,
     archiveConversation,

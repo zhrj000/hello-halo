@@ -8,7 +8,7 @@ import {
 import { collaboratorReceipt, hasRetiredDailyTeamTool, type CollaboratorReceipt } from '../fixtures/acceptance-collaboration'
 import { modelTool, type AcceptanceModel } from '../fixtures/acceptance-model'
 import { openManagedConversation } from '../fixtures/acceptance-management'
-import { navigateToApps, navigateToChat } from '../fixtures/helpers'
+import { navigateToApps, navigateToChat, openCollaborationTeamView } from '../fixtures/helpers'
 
 type StoredMessage = { id: string; role: string; content: string }
 type Collaboration = {
@@ -103,9 +103,7 @@ function teamHeader(page: Page, name: string) {
 }
 
 async function openSourceRoom(page: Page, name: string) {
-  const label = page.getByText(`Team: ${name}`, { exact: true })
-  await expect(label).toHaveCount(1)
-  await label.locator('..').getByRole('button', { name: 'Open team view', exact: true }).click()
+  await openCollaborationTeamView(page)
   await expect(teamHeader(page, name)).toBeVisible()
   await expect(page.getByRole('region', { name: 'Task room', exact: true })).toBeVisible()
 }

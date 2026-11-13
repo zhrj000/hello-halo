@@ -166,6 +166,16 @@ export interface TeamParticipant extends TeamMember {
   isTemporary: true
 }
 
+/** A collaborator is addressed by its given name plus the start of its id, so alike names stay distinct. */
+export function temporaryMemberHandle(name: string, appId: string): string {
+  return `${name}-${appId.slice(0, 8)}`
+}
+
+/** The name people read: a collaborator's given name, without the id suffix that only addressing needs. */
+export function memberDisplayName(member: Pick<TeamMember, 'appId' | 'memberName' | 'role'>): string {
+  return member.role && member.memberName === temporaryMemberHandle(member.role, member.appId) ? member.role : member.memberName
+}
+
 /**
  * The owner's answer to "what may my teammates make this digital human do".
  * Read in permissive mode: an unset switch grants, so the switches only ever
@@ -374,6 +384,8 @@ export type TeamConversationKind = 'native' | 'im' | 'member' | 'run' | 'collab'
 export interface TeamConversation {
   workItemId?: string
   completed?: boolean
+  /** When the work was ended as done; absent while open and again once it resumes. */
+  finishedAt?: number
   createdByMe?: boolean
   involvedMe?: boolean
   triggerType?: TeamRunTriggerType
@@ -1255,7 +1267,32 @@ export const TEAM_EVENTS = {
   memberHistory: 'team:member-history',
 } as const
 
+export interface TeamListNativeTasksInput {
+  spaceId: string
+  limit?: number
+  cursor?: string
+  /** Resolve at most 100 nonempty IDs within the same scope; incompatible with cursor. */
+  epochIds?: string[]
+  /**
+   * `mine` keeps what concerns the viewer: tasks they started, tasks waiting on
+   * them, and recent tasks one of their digital humans took part in. Ignored
+   * when `epochIds` is given.
+   */
+  scope?: 'mine'
+}
+
+export interface TeamNativeTaskPage {
+  items: (TeamConversation & {
+    teamName: string
+    spaceId: string
+    /** Display name of the person who started the task, when it can be told. */
+    startedBy?: string
+  })[]
+  nextCursor: string | null
+}
+
 export const TEAM_IPC = {
+  listNativeTasks: 'team:list-native-tasks',
   list: 'team:list',
   get: 'team:get',
   create: 'team:create',

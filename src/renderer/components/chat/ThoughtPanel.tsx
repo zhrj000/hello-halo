@@ -12,10 +12,8 @@ import {
   ChevronDown,
   ChevronRight,
   ChevronUp,
-  Lightbulb,
   ListTodo,
   Loader2,
-  XCircle,
 } from 'lucide-react'
 import { TodoCard } from '../tool/TodoCard'
 import type { TodoItem } from '../../utils/thought-activity'
@@ -64,7 +62,7 @@ const ThoughtStep = memo(function ThoughtStep({ thought, isLast, live, allThough
         </div>
         <div className="flex-1 pb-3 min-w-0">
           <div className="rounded-lg border border-border-soft bg-muted/15 overflow-hidden">
-            <ArrivalCard message={thought.arrival} inProcess />
+            <ArrivalCard message={thought.arrival} />
           </div>
         </div>
       </div>
@@ -285,7 +283,7 @@ export const ThoughtSteps = memo(function ThoughtSteps({ steps, childGroups, liv
 interface ThoughtPanelHeaderProps {
   label: string
   isThinking?: boolean
-  hasError?: boolean
+  errorCount?: number
   /** How long the reply worked, shown once it is done. */
   seconds?: string
   isExpanded?: boolean
@@ -302,7 +300,7 @@ interface ThoughtPanelHeaderProps {
 export function ThoughtPanelHeader({
   label,
   isThinking = false,
-  hasError = false,
+  errorCount = 0,
   seconds,
   isExpanded = false,
   onToggle,
@@ -313,18 +311,13 @@ export function ThoughtPanelHeader({
 }: ThoughtPanelHeaderProps) {
   const { t } = useTranslation()
   const tasksDone = !!tasks && tasks.done === tasks.total
-  // The status icon leads, on the same left edge as the sender label and the reply;
-  // the disclosure chevron trails the title.
+  // Only a running reply leads with an icon; once done, the title alone starts on the
+  // sender label's left edge.
   const content = <>
-    {isThinking ? (
-      <Loader2 size={14} className="shrink-0 text-primary animate-spin" />
-    ) : hasError ? (
-      <XCircle size={14} className="shrink-0 text-destructive" />
-    ) : (
-      <Lightbulb size={14} className={`shrink-0 ${unavailable ? 'text-muted-foreground/40' : 'text-primary'}`} />
-    )}
-    <span className={`min-w-0 truncate ${isThinking ? 'text-primary' : 'text-muted-foreground'}`}>{label}</span>
+    {isThinking && <Loader2 size={14} className="shrink-0 text-primary animate-spin" />}
+    <span className={`min-w-0 truncate ${isThinking ? 'text-primary' : unavailable ? 'text-muted-foreground/60' : 'text-muted-foreground'}`}>{label}</span>
     {seconds !== undefined && <span className="shrink-0 text-muted-foreground/60">{seconds}s</span>}
+    {errorCount > 0 && <span className="shrink-0 text-destructive">{t('Errors {{count}}', { count: errorCount })}</span>}
     {tasks && tasks.total > 0 && (
       <span className={`shrink-0 inline-flex items-center gap-1 ${tasksDone ? 'text-halo-success' : 'text-muted-foreground'}`}>
         <ListTodo size={12} />
@@ -409,7 +402,7 @@ export function ThoughtPanel({
       <ThoughtPanelHeader
         label={isThinking ? (currentTask ? currentTask.activeForm || currentTask.content : activity) ?? t('Already thought') : t('Already thought')}
         isThinking={isThinking}
-        hasError={model.errorCount > 0}
+        errorCount={model.errorCount}
         seconds={isThinking ? undefined : seconds}
         isExpanded={isExpanded}
         onToggle={hasBody ? onToggleExpanded : undefined}

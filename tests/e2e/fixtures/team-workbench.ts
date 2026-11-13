@@ -1,10 +1,21 @@
-import type { ElectronApplication, Page } from '@playwright/test'
+import { expect, type ElectronApplication, type Page } from '@playwright/test'
 import { waitForHomePage, navigateToApps } from './helpers'
+
+export async function selectTaskMember(page: Page, name: string) {
+  const item = taskMemberRail(page).getByRole('button', { name: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}( · |$)`) })
+  await item.click()
+  await expect(item).toHaveAttribute('aria-pressed', 'true')
+}
+
+export function taskMemberRail(page: Page) {
+  return page.getByRole('region', { name: 'Conversation' }).getByRole('group', { name: 'Team members', exact: true })
+}
 
 interface WorkbenchFixtureOptions {
   goalFreeCreation?: boolean
   temporaryParticipants?: boolean
   ownCount?: number
+  remoteLead?: boolean
   withDecision?: boolean
   historyFailure?: boolean
   readonlyKind?: 'im' | 'run'
@@ -21,10 +32,10 @@ interface WorkbenchFixtureOptions {
 /** Deterministic IPC boundary fixture; all rendering and interaction use the built app. */
 export async function openTeamWorkbench(app: ElectronApplication, page: Page, options: WorkbenchFixtureOptions = {}) {
   await waitForHomePage(page)
-  await app.evaluate(({ ipcMain }, { ownCount: count = 2, withDecision: decision, historyFailure, readonlyKind, allowCreate, sendFailure, sendFailureDelay = 500, timestampAnomalies, provenanceMessages, collaborationJourney, remoteDecision, legacyRecovery, temporaryParticipants, goalFreeCreation }) => {
+  await app.evaluate(({ ipcMain, BrowserWindow }, { ownCount: count = 2, remoteLead, withDecision: decision, historyFailure, readonlyKind, allowCreate, sendFailure, sendFailureDelay = 500, timestampAnomalies, provenanceMessages, collaborationJourney, remoteDecision, legacyRecovery, temporaryParticipants, goalFreeCreation }) => {
     const now = Date.now() - 60_000
     const roster = [
-      { appId: 'lead', memberName: 'Lead', sameMachine: count > 0, isLead: true },
+      { appId: 'lead', memberName: 'Lead', sameMachine: count > 0 && !remoteLead, isLead: true },
       { appId: 'research', memberName: 'Research', sameMachine: count > 1, isLead: false },
       { appId: 'remote', memberName: 'Remote Analyst', sameMachine: false, isLead: false },
     ].map(member => ({
@@ -92,6 +103,10 @@ export async function openTeamWorkbench(app: ElectronApplication, page: Page, op
     bind('team:list', () => ({ success: true, data: [{ ...team, memberCount: roster.length, hasWaitingUser: false, updatedAt: now, localMembers: roster.filter(member => member.sameMachine) }] }))
     bind('team:get-detail', () => ({ success: true, data: detail }))
     bind('team:list-conversations', () => ({ success: true, data: tasks }))
+    bind('team:list-native-tasks', () => ({ success: true, data: {
+      items: tasks.filter(task => task.kind === 'native').map(task => ({ ...task, teamName: team.name })),
+      nextCursor: null,
+    } }))
     bind('team:list-epochs', () => ({ success: true, data: [] }))
     const reads = { board: 0, roster: 0 }
     ;(globalThis as any).workbenchReads = reads
@@ -139,16 +154,21 @@ export async function openTeamWorkbench(app: ElectronApplication, page: Page, op
     bind('app:respond-escalation', ({ response }) => { temporaryDecision.userResponse = response; detail.pendingEscalations = []; return { success: true } })
     if (temporaryParticipants) bind('app:get-activity', ({ appId, options }) => ({ success: true, data: appId === 'temporary' && options?.epochId === 'epoch-0' ? [temporaryDecision] : [] }))
     bind('app:chat-status', () => ({ success: true, data: { isGenerating: false } }))
+    const notifyTasks = () => {
+      for (const window of BrowserWindow.getAllWindows()) window.webContents.send('team:updated', { teamId: team.id, changed: ['conversations'] })
+    }
     bind('team:open-conversation', ({ title, memberAppId }) => {
       if (!allowCreate || memberAppId) throw new Error('Changing members must not create a conversation')
       const epochId = `created-${tasks.length}`
       tasks.push({ ...tasks[1], epochId, workItemId: epochId, label: title, lastActivityAt: Date.now() })
+      notifyTasks()
       return { success: true, data: { epochId } }
     })
     bind('team:rename-conversation', ({ epochId, title }) => {
       const task = tasks.find(item => item.epochId === epochId)
       if (!task) return { success: false, error: 'Unknown fixture task' }
       task.label = title
+      notifyTasks()
       return { success: true }
     })
     bind('app:chat-send', async ({ conversationId, appId }) => {
@@ -177,6 +197,7 @@ export async function openTeamWorkbench(app: ElectronApplication, page: Page, op
   await page.getByRole('button', { name: /^Teams\b|^团队/ }).click()
   await page.getByRole('button', { name: /Workbench review/ }).click()
   await page.setViewportSize({ width: 1440, height: 1000 })
+  if (options.legacyRecovery) return
   const sidebar = page.getByRole('navigation', { name: 'Tasks', exact: true })
   if (options.readonlyKind) await sidebar.getByRole('searchbox', { name: 'Search tasks' }).fill('Product research')
   await sidebar.getByRole('button', { name: /Product research/ }).click()

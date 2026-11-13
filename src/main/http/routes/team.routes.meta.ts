@@ -14,6 +14,7 @@ const APP_ID = '<appId — a member appId from GET /api/teams/:teamId/detail>'
 export const MODULE: RouteModuleMeta = {
   file: 'team',
   routes: {
+    'GET /api/teams/native-tasks': { expose: 'internal' },
     'GET /api/teams': {
       expose: 'ai',
       group: 'team',

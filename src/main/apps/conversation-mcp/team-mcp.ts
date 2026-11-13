@@ -3,6 +3,7 @@ import { getTeamService, type ParticipantSource } from '../team'
 import { getAppManager } from '../manager'
 import { getActiveTeamRuntime, createCoordinationMcpServer, type TeamMcpContext } from '../runtime/team'
 import { getSpace } from '../../services/space.service'
+import { getConversation } from '../../services/conversation.service'
 import type { ToolsetScope } from '../../services/agent/toolsets'
 import { nativeChatAppId } from '../../../shared/apps/im-keys'
 import { spaceCoordinatorAppId, type TeamRequestOrigin } from '../../../shared/apps/team-types'
@@ -83,7 +84,9 @@ export function createSpaceTeamMcpServer(scope: SpaceTeamMcpScope, source?: () =
       if (!service.participants.requestAllowed(capturedRequest)) throw new CollaborationRefusal('request_stopped', 'This collaboration request was stopped.')
     }
     check()
-    const work = await service.ensureCollaboration({ owningSpaceId: scope.spaceId, conversationId: scope.conversationId, title: input.prompt })
+    // The team is named after the conversation it serves, not the first collaborator's brief.
+    const title = getConversation(scope.spaceId, scope.conversationId)?.title?.trim() || input.prompt
+    const work = await service.ensureCollaboration({ owningSpaceId: scope.spaceId, conversationId: scope.conversationId, title })
     context.signal?.throwIfAborted()
     check()
     const member = await service.participants.spawn({ teamId: work.team.id, epochId: work.epochId, callerAppId,

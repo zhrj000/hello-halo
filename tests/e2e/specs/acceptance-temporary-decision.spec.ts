@@ -6,7 +6,7 @@ import type { EpochBoard } from '../../../src/shared/apps/team-types'
 import type { TranscriptMessage } from '../../../src/shared/types/transcript'
 import { buildTeamSessionKey } from '../../../src/shared/apps/team-types'
 import { test, expect, acceptance, sendAcceptanceMessage, readAcceptanceConversation, waitForAcceptanceIdle } from '../fixtures/acceptance-app'
-import { navigateToChat } from '../fixtures/helpers'
+import { navigateToChat, openCollaborationTeamView } from '../fixtures/helpers'
 import { openManagedConversation } from '../fixtures/acceptance-management'
 import { readDecision, pendingDecisions } from '../fixtures/acceptance-decisions'
 import { collaboratorReceipt, hasRetiredDailyTeamTool, type CollaboratorReceipt } from '../fixtures/acceptance-collaboration'
@@ -43,9 +43,7 @@ async function waitForMemberIdle(page: Page, scope: Scope, appId: string) {
 }
 
 async function openMemberRoom(page: Page, scope: Scope, member: CollaboratorReceipt) {
-  const badge = page.getByText(`Team: ${scope.name}`, { exact: true })
-  await expect(badge).toHaveCount(1)
-  await badge.locator('..').getByRole('button', { name: 'Open team view', exact: true }).click()
+  await openCollaborationTeamView(page)
   const header = page.getByRole('heading', { name: scope.name, level: 1, exact: true }).locator('xpath=ancestor::header')
   await expect(header).toBeVisible()
   const select = page.getByRole('button', { name: `View ${member.name}’s work in this task`, exact: true })

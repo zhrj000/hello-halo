@@ -1,6 +1,6 @@
 /**
  * An older collaboration with installed members, opened the way a person opens one: from the
- * collaboration card in the space conversation that coordinates it.
+ * temporary team bar in the space conversation that coordinates it.
  *
  * It has exactly one conversation — the room its coordinator talks to the team
  * in — so the workbench shows that room and offers no task list, no way to open
@@ -9,8 +9,8 @@
  * the same code that runs for a user.
  */
 
-import { test, expect, COLLAB_CONVERSATION_TITLE, COLLAB_MEMBER_NAME, COLLAB_TEAM_NAME } from '../fixtures/team-collab'
-import { waitForHomePage } from '../fixtures/helpers'
+import { test, expect, COLLAB_CONVERSATION_TITLE, COLLAB_MEMBER_NAME } from '../fixtures/team-collab'
+import { openCollaborationTeamView, waitForHomePage } from '../fixtures/helpers'
 
 test.setTimeout(60000)
 
@@ -52,7 +52,7 @@ test.describe('repaired collaboration history', () => {
 test('keeping an older collaboration reuses its installed members without transferring the current task', async ({ window, collaboration }) => {
   await waitForHomePage(window)
   await window.getByText(COLLAB_CONVERSATION_TITLE, { exact: true }).first().click()
-  await window.getByRole('button', { name: 'Open team view', exact: true }).click()
+  await openCollaborationTeamView(window)
   await expect(window.getByRole('button', { name: 'View coordinator’s work in this task', exact: true })).toHaveCount(0)
   await window.getByRole('button', { name: 'Keep this team', exact: true }).click()
   const savedLink = window.getByRole('button', { name: 'Open saved team', exact: true })
@@ -97,11 +97,8 @@ test('a collaboration is one room: no task list, no task to create', { annotatio
   await waitForHomePage(window)
 
   await window.getByText(COLLAB_CONVERSATION_TITLE, { exact: true }).first().click()
-  const openTeamView = window.getByRole('button', { name: 'Open team view', exact: true })
-  await expect(openTeamView).toBeVisible()
-  await expect(window.getByText(`Team: ${COLLAB_TEAM_NAME}`, { exact: true })).toBeVisible()
-
-  await openTeamView.click()
+  await expect(window.getByRole('group', { name: 'Team members', exact: true }).getByRole('button', { name: COLLAB_MEMBER_NAME })).toBeVisible()
+  await openCollaborationTeamView(window)
 
   // The collaboration's workbench: the one action it offers is keeping the team.
   const room = window.getByRole('region', { name: 'Task room' })

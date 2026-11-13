@@ -58,7 +58,7 @@ function makeRuntime(store: TeamStore, busyByApp: Map<string, RosterBusyEntry[]>
     getObservableStatus: (teamId: string) => store.getTeamById(teamId)?.status ?? 'idle',
     getMemberBusy: (appId: string) => busyByApp.get(appId) ?? [],
     startEpoch: vi.fn(),
-    ensureConversationEpoch: (teamId: string, chatKey: string, title?: string): TeamEpoch => {
+    ensureConversationEpoch: (teamId: string, chatKey: string, title?: string, createdBy?: string, entryAppId?: string): TeamEpoch => {
       const existing = store.getOpenConversationEpoch(teamId, chatKey)
       if (existing) return existing
       const epoch: TeamEpoch = {
@@ -66,6 +66,7 @@ function makeRuntime(store: TeamStore, busyByApp: Map<string, RosterBusyEntry[]>
         summary: null, lifecycle: 'conversation', chatKey, title: title ?? null,
       }
       store.insertEpoch(epoch, 'event')
+      if (createdBy || entryAppId) store.updateWorkItem(epoch.id, { ...(createdBy ? { createdBy } : {}), ...(entryAppId ? { entryAppId } : {}) })
       return epoch
     },
     renameConversationEpoch: (teamId: string, epochId: string, title: string | null) => store.renameEpoch(epochId, title),
@@ -90,7 +91,7 @@ describe('TeamService — conversations + pending escalations', () => {
     const runtime = makeRuntime(store, busyByApp)
     const deps: TeamServiceDeps = {
       store,
-      appManager: { getApp: (id: string) => ({ id, spaceId: SPACE, spec: { name: id } }) } as never,
+      appManager: { getApp: (id: string) => ({ id, spaceId: SPACE, spec: { name: id } }), listApps: ({ spaceId }: { spaceId: string }) => spaceId === SPACE ? [{ id: LEAD_APP }, { id: MEMBER_APP }] : [] } as never,
       getRuntime: () => runtime as never,
       spaces: { spaceExists: () => true, createMemberSpace: () => 'ms' },
       listArtifacts: vi.fn(async () => []),
@@ -115,13 +116,76 @@ describe('TeamService — conversations + pending escalations', () => {
 
   afterEach(() => { dbManager.closeAll() })
 
-  it('new tasks addressed to the same member have independent contexts and titles', async () => {
+  it('pages native homepage tasks without reading whole-team histories', async () => {
     const svc = build()
+    const first = await svc.openConversation(TEAM_ID, 'First', MEMBER_APP)
+    const second = await svc.openConversation(TEAM_ID, 'Second', MEMBER_APP)
+    const fullRead = vi.spyOn(store, 'listEpochsByTeam')
+    const stats = vi.spyOn(store, 'getConversationStats')
+    const page = svc.listNativeTasks({ spaceId: SPACE, limit: 1 })
+    expect(page.items).toHaveLength(1)
+    expect(page.items[0]).toMatchObject({ teamId: TEAM_ID, teamName: 'Team', spaceId: SPACE, kind: 'native' })
+    expect(page.nextCursor).toBeTruthy()
+    const next = svc.listNativeTasks({ spaceId: SPACE, limit: 1, cursor: page.nextCursor! })
+    expect(new Set([...page.items, ...next.items].map(item => item.epochId))).toEqual(new Set([first.epochId, second.epochId]))
+    expect(next.nextCursor).toBeNull()
+    expect(fullRead).not.toHaveBeenCalled()
+    expect(stats.mock.calls.every(call => call[2]?.length === 1 && call[3] === false)).toBe(true)
+    expect(svc.listNativeTasks({ spaceId: 'other' }).items).toEqual([])
+    expect(() => svc.listNativeTasks({ spaceId: 'other', cursor: page.nextCursor! })).toThrow('cursor')
+    expect(() => svc.listNativeTasks({ spaceId: SPACE, limit: 0 })).toThrow('limit')
+  })
+
+  it('resolves old pins within space scope without a continuation cursor', async () => {
+    const svc = build()
+    const old = await svc.openConversation(TEAM_ID, 'Pinned', MEMBER_APP)
+    for (let i = 0; i < 31; i++) {
+      const recent = await svc.openConversation(TEAM_ID, `Recent ${i}`, MEMBER_APP)
+      store.touchEpoch(recent.epochId, Date.now() + 1000 + i)
+    }
+    expect(svc.listNativeTasks({ spaceId: SPACE }).items.map(item => item.epochId)).not.toContain(old.epochId)
+    const epochIds = [old.epochId, 'missing', old.epochId]
+    const page = svc.listNativeTasks({ spaceId: SPACE, epochIds, limit: 100 })
+    expect(page.items.map(item => item.epochId)).toEqual([old.epochId])
+    expect(page.nextCursor).toBeNull()
+    expect(svc.listNativeTasks({ spaceId: 'other', epochIds }).items).toEqual([])
+    expect(svc.listNativeTasks({ spaceId: SPACE, epochIds: [] })).toEqual({ items: [], nextCursor: null })
+    const allIds = store.listEpochsByTeam(TEAM_ID).map(epoch => epoch.id)
+    expect(svc.listNativeTasks({ spaceId: SPACE, epochIds: allIds, limit: 1 }).items).toHaveLength(1)
+    expect(svc.listNativeTasks({ spaceId: SPACE, epochIds: allIds, limit: 1 }).nextCursor).toBeNull()
+  })
+
+  it.each([null, 'task', {}, [1], [''], ['   '], Array(101).fill('task')])(
+    'rejects invalid exact IDs %j', epochIds => {
+      const svc = build()
+      const query = vi.spyOn(store, 'listNativeTaskEpochs')
+      expect(() => svc.listNativeTasks({ spaceId: SPACE, epochIds: epochIds as never })).toThrow('epochIds')
+      expect(query).not.toHaveBeenCalled()
+    },
+  )
+
+  it('rejects exact IDs combined with even an empty cursor', () => {
+    expect(() => build().listNativeTasks({ spaceId: SPACE, epochIds: [], cursor: '' })).toThrow('cursor')
+  })
+
+  it('opens independent native conversations without assigning blackboard tasks', async () => {
+    const svc = build()
+    const insertTask = vi.spyOn(store, 'insertTask')
     const first = await svc.openConversation(TEAM_ID, 'First request', MEMBER_APP)
     const second = await svc.openConversation(TEAM_ID, 'Second request', MEMBER_APP)
+    const firstEpoch = store.getEpochById(first.epochId)!
+    const secondEpoch = store.getEpochById(second.epochId)!
+
     expect(first.epochId).not.toBe(second.epochId)
-    expect(store.getEpochById(first.epochId)!.title).toBe('First request')
-    expect(store.getEpochById(second.epochId)!.title).toBe('Second request')
+    expect(firstEpoch).toMatchObject({ teamId: TEAM_ID, lifecycle: 'conversation', title: 'First request', endedAt: null,
+      workItem: { id: first.epochId, status: 'open', entryAppId: MEMBER_APP } })
+    expect(secondEpoch).toMatchObject({ teamId: TEAM_ID, lifecycle: 'conversation', title: 'Second request', endedAt: null,
+      workItem: { id: second.epochId, status: 'open', entryAppId: MEMBER_APP } })
+    expect(firstEpoch.chatKey).toMatch(/^native:/)
+    expect(secondEpoch.chatKey).toMatch(/^native:/)
+    expect(firstEpoch.chatKey).not.toBe(secondEpoch.chatKey)
+    expect(store.listTasksByTeam(TEAM_ID)).toEqual([])
+    expect(insertTask).not.toHaveBeenCalled()
   })
 
   it('conversation summaries do not materialize activity bodies or repeat member reads', async () => {
@@ -305,6 +369,21 @@ describe('TeamService — conversations + pending escalations', () => {
     const { epochId } = await svc.openConversation(TEAM_ID)
     await svc.archiveConversation(TEAM_ID, epochId)
     expect(svc.listConversations(TEAM_ID)).toEqual([expect.objectContaining({ epochId, completed: true })])
+  })
+
+  it('tells when a conversation was ended as done, but not when it was stopped', () => {
+    const svc = build()
+    store.insertEpoch({
+      id: 'conv-done', teamId: TEAM_ID, startedAt: 1, endedAt: 5, endReason: 'completed', summary: 'Shipped',
+      lifecycle: 'conversation', chatKey: nativeConversationChatKey('done'),
+    })
+    store.insertEpoch({
+      id: 'conv-stopped', teamId: TEAM_ID, startedAt: 1, endedAt: 6, endReason: 'stopped', summary: null,
+      lifecycle: 'conversation', chatKey: nativeConversationChatKey('stopped'),
+    })
+    const list = svc.listConversations(TEAM_ID)
+    expect(list.find(c => c.epochId === 'conv-done')).toMatchObject({ finishedAt: 5 })
+    expect(list.find(c => c.epochId === 'conv-stopped')?.finishedAt).toBeUndefined()
   })
 
   it('getTeamDetail carries the team\u2019s pending escalations; other teams\u2019 are excluded', async () => {
