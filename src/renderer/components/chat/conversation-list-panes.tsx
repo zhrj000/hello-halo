@@ -1,7 +1,8 @@
 /**
- * The conversation list's height-resizable panes (pinned, digital humans):
- * a drag hook and its handle. The pane filling the rest of the column is
- * marked `data-fill-pane` and keeps its header plus one row under any resize.
+ * The pinned pane's height: a drag hook and its handle. Pinned stays in place
+ * above the scrolling list, so it keeps a height of its own; the scrolling list
+ * below fills the rest, is marked `data-fill-pane`, and keeps a heading plus one
+ * row under any resize.
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -10,10 +11,11 @@ import { cn } from '../../lib/utils'
 import { useConversationListPrefs, type ResizablePane } from '../../stores/conversation-list-prefs.store'
 
 export const ROW_HEIGHT = 32
+/** A listed row with its spacing. */
+const LISTED_ROW = 34
 /** Pane heights before the user drags them; past this the pane scrolls on its own. */
 const PANE_DEFAULT_HEIGHT: Record<ResizablePane, number> = {
-  pinned: 5 * ROW_HEIGHT,
-  'digital-humans': 8 * ROW_HEIGHT,
+  pinned: 5 * LISTED_ROW,
 }
 /** Room the filling pane keeps under a drag: its header plus one row. */
 const FILL_PANE_MIN_HEIGHT = 36 + ROW_HEIGHT

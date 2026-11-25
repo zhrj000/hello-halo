@@ -317,7 +317,7 @@ export interface TeamStore {
   getTeamByName(spaceId: string, name: string, ephemeral?: boolean): Team | null
   listTeams(): Team[]
   listTeamsBySpace(spaceId: string): Team[]
-  listStandingTeams(spaceId?: string): Team[]
+  listStandingTeams(spaceId?: string, localAppIds?: readonly string[]): Team[]
   updateTeamFields(teamId: string, fields: TeamFieldUpdate): void
   updateTeamStatus(teamId: string, status: TeamStatus): void
   updateTeamLeadAppId(teamId: string, leadAppId: string | null): void

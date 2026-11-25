@@ -672,8 +672,10 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   appChatSend: (request: { appId: string; spaceId: string; message: string; images?: ImageAttachment[]; thinkingEnabled?: boolean; reasoningEffort?: ReasoningEffortLevel; canvasContext?: CanvasContext; references?: ContentReference[]; conversationId?: string; teamContext?: unknown }) => Promise<IpcResponse<{ conversationId: string }>>
   appChatStop: (appId: string, conversationId?: string) => Promise<IpcResponse>
   // Add a message to the running turn; delivered:false when no turn was in flight
-  appChatInject: (input: AppChatInjectRequest) => Promise<IpcResponse<{ delivered: boolean; stopped?: boolean }>>
-  appChatStatus: (appId: string, conversationId?: string) => Promise<IpcResponse<{ isGenerating: boolean; conversationId: string }>>
+  appChatInject: (input: AppChatInjectRequest) => Promise<IpcResponse<import('../shared/apps/app-types').AppChatInjectResult>>
+  // Take back a message waiting behind a turn that serves someone else (afterTurn above)
+  appChatWithdraw: (input: { appId: string; conversationId: string; message: string }) => Promise<IpcResponse<{ withdrawn: boolean }>>
+  appChatStatus: (appId: string, conversationId?: string) => Promise<IpcResponse<{ isGenerating: boolean; conversationId: string; servesOther?: 'colleague' | 'guest' }>>
   appChatMessages: (input: { appId: string; spaceId: string; conversationId?: string }) => Promise<IpcResponse<import('../shared/types/transcript').TranscriptMessage[]> & import('../shared/apps/app-types').AppChatEngineMetadata>
   // Paged read, newest page first; messages carry thoughts:null (see appChatMessageThoughts)
   appChatTranscript: (input: { appId: string; spaceId: string; conversationId?: string; before?: string; limit?: number; through?: string }) => Promise<IpcResponse<import('../shared/apps/app-types').AppChatTranscriptPage>>

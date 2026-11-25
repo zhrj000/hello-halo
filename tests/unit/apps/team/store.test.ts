@@ -220,6 +220,20 @@ describe('TeamStore', () => {
       expect(store.listNativeTaskEpochs(SPACE_A, ['local'], 1, undefined, ids)).toHaveLength(1)
     })
 
+    it('lists a joined team in the spaces holding its local members, before it has any conversation', () => {
+      store.insertTeam(makeTeam())
+      store.insertTeam(makeTeam({ id: 'joined', name: 'Joined', owningSpaceId: 'office', hostNodeId: 'host' }))
+      store.insertTeam(makeTeam({ id: 'temp', name: 'Temporary', ephemeral: true }))
+      store.addMember(makeMember({ teamId: 'joined', appId: 'local', origin: 'remote', ownerNodeId: 'SELF' }))
+      store.addMember(makeMember({ teamId: 'joined', appId: 'other', memberName: 'other', origin: 'remote', ownerNodeId: 'elsewhere' }))
+      expect(store.listStandingTeams(SPACE_A, ['local']).map(team => team.id).sort()).toEqual(['joined', 'team-1'])
+      expect(store.listStandingTeams(SPACE_B, ['local']).map(team => team.id)).toEqual(['joined'])
+      // Only someone else's member: not this space's team.
+      expect(store.listStandingTeams(SPACE_B, ['other'])).toEqual([])
+      expect(store.listStandingTeams(SPACE_A).map(team => team.id)).toEqual(['team-1'])
+      expect(store.listStandingTeams().map(team => team.id).sort()).toEqual(['joined', 'team-1'])
+    })
+
     describe('mine scope', () => {
       const NOW = 10 * 24 * 3600_000
       const WEEK = 7 * 24 * 3600_000

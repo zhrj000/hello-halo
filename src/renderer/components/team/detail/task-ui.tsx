@@ -1,14 +1,13 @@
 import { Fragment, memo, type ReactNode } from 'react'
 import { CheckCircle2, ChevronDown, ChevronRight, MinusCircle } from 'lucide-react'
 import type { TFunction } from 'i18next'
-import type { RosterMember, TeamActivity, TeamConversation, TeamDetail } from '../../../../shared/apps/team-types'
+import type { RosterMember, TeamConversation, TeamDetail } from '../../../../shared/apps/team-types'
 import { useTranslation } from '../../../i18n'
 import { formatRunStart, formatTimeAgo } from '../../../utils/format-time'
 import { getImChannelDisplay } from '../../apps/im-channel-labels'
 import { failureCause } from '../workbench/progress'
 import { failureCauseText, progressMemberName } from '../workbench/progress-labels'
 import { addressedMember } from './crew'
-import { RowCrew } from './crew-ui'
 import { taskState, type TaskFact, type TaskStateKey } from './status'
 
 const STATE_DOT: Partial<Record<TaskStateKey, string>> = {
@@ -134,8 +133,6 @@ export function taskTitle(detail: TeamDetail, task: TeamConversation, t: TFuncti
 
 type TaskRowProps = {
   detail: TeamDetail; task: TeamConversation; selected?: boolean
-  /** `recent` is this task's own recent exchanges, so another task's talk does not redraw this row. */
-  crew?: { recent: readonly TeamActivity[]; cap: number; size: number }
   onOpen: (epochId: string) => void
 }
 
@@ -147,11 +144,14 @@ function sameRow(previous: TaskRowProps, next: TaskRowProps): boolean {
   return previous.task === next.task && previous.selected === next.selected && previous.onOpen === next.onOpen
     && previous.detail.team === next.detail.team && previous.detail.roster === next.detail.roster
     && previous.detail.pendingEscalations === next.detail.pendingEscalations
-    && previous.crew?.recent === next.crew?.recent && previous.crew?.cap === next.crew?.cap && previous.crew?.size === next.crew?.size
 }
 
-/** One task: name, the one fact that matters most, what it produced, when it last moved and, given `crew`, who is on it now. */
-export const TaskRow = memo(function TaskRow({ detail, task, selected = false, crew, onOpen }: TaskRowProps) {
+/**
+ * One task: name, the one fact that matters most, what it produced and when it
+ * last moved. Who is on it is told inside the task (its team scene), not here:
+ * a row of small faces told little apart and crowded out the line above.
+ */
+export const TaskRow = memo(function TaskRow({ detail, task, selected = false, onOpen }: TaskRowProps) {
   const { t } = useTranslation()
   const state = taskState(detail, task)
   const title = taskTitle(detail, task, t)
@@ -179,16 +179,15 @@ export const TaskRow = memo(function TaskRow({ detail, task, selected = false, c
         <span className="sm:hidden">{parts.length > 0 && ' · '}{time}</span>
       </span>
     </span>
-    {crew && <RowCrew detail={detail} task={task} recent={crew.recent} cap={crew.cap} size={crew.size} />}
     <span className="hidden min-w-[4.5rem] shrink-0 whitespace-nowrap text-right text-xs tabular-nums text-faint-foreground sm:block">{time}</span>
   </button>
 }, sameRow)
 
-/** The way into the members' conversations, counting their exchanges. */
-export function MemberConversationsLink({ count, onOpen, className = '' }: { count: number; onOpen: () => void; className?: string }) {
+/** The way into the collaboration record, counting the members' exchanges. */
+export function CollaborationRecordLink({ count, onOpen, className = '' }: { count: number; onOpen: () => void; className?: string }) {
   const { t } = useTranslation()
   return <button type="button" onClick={onOpen} className={`inline-flex min-h-8 min-w-0 items-center gap-1 rounded text-[12.5px] text-subtle-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${className}`}>
-    <span className="truncate">{count ? t('Member conversations · {{count}} exchanges', { count }) : t('Member conversations')}</span>
+    <span className="truncate">{count ? t('Collaboration record · {{count}} exchanges', { count }) : t('Collaboration record')}</span>
     <ChevronRight size={13} aria-hidden="true" className="shrink-0" />
   </button>
 }

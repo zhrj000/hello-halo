@@ -276,10 +276,11 @@ team scene, the subtask timeline and the outputs after it, wherever the work sta
 Only the shells differ: the panel has "Open conversation", the canvas the team line.
 Any member it names (the brief, scene, footer or a subtask's assignee) switches the
 chat to them in this conversation, as picking them in the member selector would,
-rather than opening a second view of their work here. A temporary team's member opens in place of the chat of the conversation that
+rather than opening a second view of their work here; the team page's task panel turns
+to a member the same way, opening this conversation on them. A temporary team's member opens in place of the chat of the conversation that
 leads it (`collab-member-view.store`); on a machine without that conversation it opens
-the member's execution here instead. The collaboration record ("Member conversations")
-and members are subpages one step away.
+the member's execution here instead. The collaboration record ("Collaboration record · N
+exchanges" under the scene) and members are subpages one step away.
 The work reads as done once it was ended as done (`finishedAt`, or archived) or
 every subtask is done or rejected with nobody still working, waiting or failed
 (`taskProgress().finished`); a new message or subtask turns it back to in progress.

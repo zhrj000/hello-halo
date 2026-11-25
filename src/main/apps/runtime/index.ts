@@ -128,6 +128,7 @@ export {
   sendAppChatMessage,
   stopAppChat,
   stopAppChatConversation,
+  withdrawWaitingAppChatMessage,
   isAppChatGenerating,
   isAppChatConversationGenerating,
   loadAppChatMessages,
@@ -151,7 +152,8 @@ export {
   renameChatSession,
 } from './app-chat'
 export type { AppChatRequest, NativeSessionResult } from './app-chat'
-export { injectIntoAppChatWhenLive, getAppChatTurnIdentity } from './app-chat-live-turn'
+export { injectIntoAppChatWhenLive, getAppChatTurnIdentity, appChatTurnServesOther, appChatAdditionResult } from './app-chat-live-turn'
+export type { AppChatAdditionResult } from './app-chat-live-turn'
 export { createDigitalHumanConversationSource } from './conversation-source'
 export { createRunConversationSource } from './run-conversation-source'
 export { deliverRunCollaborationSource } from './team/run-work'

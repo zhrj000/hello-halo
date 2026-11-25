@@ -34,7 +34,6 @@ vi.mock('react', async original => ({
   useEffect: (run: any, deps?: unknown[]) => env.mount.effect(run, deps),
   useLayoutEffect: (run: any, deps?: unknown[]) => env.mount.effect(run, deps),
 }))
-vi.mock('react-virtuoso', () => ({ Virtuoso: function Virtuoso() { return null } }))
 vi.mock('zustand/react/shallow', () => ({ useShallow: (select: any) => select }))
 vi.mock('../../../src/renderer/api', () => ({ api: { setConfig: (...args: unknown[]) => env.setConfig(...args) } }))
 vi.mock('../../../src/renderer/i18n', () => ({ useTranslation: () => ({ t: (text: string) => text }) }))
@@ -61,11 +60,8 @@ vi.mock('../../../src/renderer/hooks/useTeamConversationRows', async original =>
   ...await original<typeof import('../../../src/renderer/hooks/useTeamConversationRows')>(),
   useTeamConversationRows: () => ({ tasks: [], teams: [], pins: [], hidden: {}, error: false }),
 }))
-vi.mock('../../../src/renderer/components/chat/conversation-list-panes', () => ({
-  ROW_HEIGHT: 32,
-  usePaneResize: () => ({ height: 160, dragging: false, handleProps: {} }),
-  PaneResizeHandle: () => null,
-}))
+vi.mock('../../../src/renderer/stores/team-chat-seen.store', async original => ({ ...await original<typeof import('../../../src/renderer/stores/team-chat-seen.store')>(), useTeamChatSeenStore: (select: any) => select({ seen: {}, since: 0, markSeen: () => {} }) }))
+vi.mock('../../../src/renderer/stores/apps-page.store', () => ({ useAppsPageStore: { getState: () => ({ setShowInstallDialog: () => {} }) } }))
 vi.mock('../../../src/renderer/components/apps/AutomationAvatar', () => ({ AutomationAvatar: () => null }))
 vi.mock('../../../src/renderer/services/home-telemetry', () => ({ markEntry: vi.fn(), trackHome: vi.fn(), trackNavigate: vi.fn() }))
 vi.mock('../../../src/renderer/utils/conversation-navigation', () => ({ openDigitalHumanChat: vi.fn() }))

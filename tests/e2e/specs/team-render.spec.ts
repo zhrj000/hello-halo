@@ -24,7 +24,7 @@ async function navigateToTeams(window: Page) {
   await navigateToApps(window)
   await window.getByRole('button', { name: /^Teams\b|^团队/ }).click()
   // Empty state or team list — either proves the view mounted
-  // (actual copy from TeamEmptyState.tsx / TeamList.tsx).
+  // (actual copy from TeamList.tsx).
   await window.waitForSelector(
     'text=/New team|Join a team|新建团队|加入团队/i',
     { timeout: 10000 }
@@ -612,32 +612,6 @@ test.describe('Task workbench interaction', () => {
     await window.screenshot({ path: 'tests/e2e/results/team-workbench-mobile-activity.png' })
     await window.keyboard.press('Escape')
     await expect(dialog).toHaveCount(0)
-  })
-  test('tasks stopped on the same model become one fix, the rest one line each', { annotation: { type: 'acceptance', description: JSON.stringify({ caseId: 'teams.tasks.needs-you', evidence: 'ui', mode: 'none', variant: {} }) } }, async ({ electronApp, window }) => {
-    await openTeamWorkbench(electronApp, window, { withDecision: true, stoppedModels: { members: ['lead', 'research'] } })
-    const board = window.locator('section').filter({ has: window.getByRole('heading', { name: 'Needs you', exact: true }) })
-    await expect(board.getByText('5', { exact: true }).first()).toBeVisible()
-    await expect(board.getByText('3 tasks stopped: model no longer available', { exact: true })).toBeVisible()
-    await board.getByRole('button', { name: /3 tasks involved/ }).click()
-    for (const label of ['Draft the launch plan', 'Price the competitors', 'Run the regression pass']) await expect(board.getByRole('button', { name: new RegExp(label) })).toBeVisible()
-    await expect(board.getByRole('button', { name: /Approve the research scope\?.*Reply/ })).toBeVisible()
-    await expect(board.getByRole('button', { name: /Research ran into a problem.*View/ })).toBeVisible()
-    for (const theme of ['light', 'dark'] as const) {
-      await setTheme(window, theme)
-      await window.setViewportSize({ width: 1440, height: 1000 })
-      await window.screenshot({ path: `tests/e2e/results/team-needs-you-${theme}.png` })
-      await window.setViewportSize({ width: 390, height: 844 })
-      expect(await window.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true)
-      await window.screenshot({ path: `tests/e2e/results/team-needs-you-${theme}-mobile.png` })
-    }
-    await window.setViewportSize({ width: 1440, height: 1000 })
-    await board.getByRole('button', { name: /Approve the research scope\?.*Reply/ }).click()
-    await board.getByRole('button', { name: 'Collapse', exact: true }).click()
-    await expect(board.getByRole('button', { name: /Approve the research scope\?.*Reply/ })).toBeVisible()
-    await board.getByRole('button', { name: 'Change model', exact: true }).click()
-    await expect(window.getByRole('heading', { name: /^Members/ })).toBeVisible()
-    await expect(window.getByRole('button', { name: 'Change model', exact: true })).toHaveCount(2)
-    await window.screenshot({ path: 'tests/e2e/results/team-needs-you-members.png' })
   })
   test('stopped work opens a step at a time and can be ended, naming who started it', { annotation: { type: 'acceptance', description: JSON.stringify({ caseId: 'teams.tasks.end-unfinished', evidence: 'ui', mode: 'none', variant: {} }) } }, async ({ electronApp, window }) => {
     await openTeamWorkbench(electronApp, window, { endable: true })

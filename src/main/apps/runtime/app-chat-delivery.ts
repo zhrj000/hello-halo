@@ -31,6 +31,7 @@ interface ChatDelivery {
 }
 
 const STOPPED_UNREAD = 'stopped before it was read'
+const WITHDRAWN = 'withdrawn by its sender'
 
 /** The owner's own words to this chat; anything a teammate, a reminder, a guest or another machine sent is not. */
 export function isPersonRequest(request: AppChatRequest): boolean {
@@ -257,7 +258,7 @@ export function createAppChatDelivery(run: (request: AppChatRequest) => Promise<
     getCoalescingKey: job => job.messages.length === 1 ? job.messages[0].request.coalescingKey : undefined,
     onDiscard: (job, reason) => {
       for (const message of job.messages) {
-        if (reason === 'superseded' || reason === 'no longer valid' || reason === STOPPED_UNREAD) message.resolve()
+        if (reason === 'superseded' || reason === 'no longer valid' || reason === STOPPED_UNREAD || reason === WITHDRAWN) message.resolve()
         else message.reject(new Error(`Pending chat message cancelled: ${reason}`))
       }
     },
@@ -311,6 +312,27 @@ export function createAppChatDelivery(run: (request: AppChatRequest) => Promise<
       const outlivesStop = (request: AppChatRequest): boolean => !!request.refreshBeforeDelivery || !!request.teamContext
       gate.discardJobs((key, job) => key === conversationId && !job.messages.some(({ request }) => outlivesStop(request)),
         'conversation stopped or cleared')
+    },
+    /**
+     * The person takes back their own message while it still waits behind the
+     * running turn (one serving someone else). Only a message nothing has read
+     * or recorded yet: once its turn opened it is the conversation's, and this
+     * answers false. Identical waiting messages are taken back latest first.
+     */
+    withdraw(conversationId: string, message: string): boolean {
+      const waiting = gate.bufferedJobs(conversationId)
+      const target = [...waiting].reverse().find(job => job.messages.length === 1
+        && isPersonRequest(job.messages[0].request) && !job.messages[0].request.inputRecorded
+        && job.messages[0].request.message.trim() === message.trim())
+      if (!target) return false
+      const request = target.messages[0].request
+      let taken = false
+      gate.discardJobs((key, job) => {
+        if (taken || key !== conversationId || job.messages.length !== 1 || job.messages[0].request !== request) return false
+        taken = true
+        return true
+      }, WITHDRAWN)
+      return taken
     },
     /**
      * A person stopped this chat: their own messages still waiting are void and

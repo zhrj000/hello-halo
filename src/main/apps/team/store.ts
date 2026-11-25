@@ -713,9 +713,23 @@ export class TeamStore implements ITeamStore {
     return (this.stmtListTeamsBySpace.all(spaceId) as TeamRow[]).map(rowToTeam)
   }
 
-  listStandingTeams(spaceId?: string): Team[] {
+  /**
+   * Saved teams, or those of one space. A team this machine owns belongs to its
+   * owning space; a team joined from elsewhere has no space of its own here, so
+   * it belongs to every space holding one of the digital humans brought into it
+   * (`localAppIds`: the space's installed apps) — the same rule that lists its
+   * conversations there, so a joined team shows in that space before its first one.
+   */
+  listStandingTeams(spaceId?: string, localAppIds: readonly string[] = []): Team[] {
     const query = spaceId
-      ? this.db.prepare('SELECT * FROM teams WHERE ephemeral = 0 AND owning_space_id = ? ORDER BY created_at DESC, id ASC').all(spaceId)
+      ? this.db.prepare(`SELECT * FROM teams team WHERE team.ephemeral = 0
+          AND ((team.host_node_id IS NULL AND team.owning_space_id = @spaceId)
+            OR (team.host_node_id IS NOT NULL AND EXISTS (
+              SELECT 1 FROM team_members member WHERE member.team_id = team.id
+                AND (member.origin != 'remote' OR member.owner_node_id = 'SELF')
+                AND member.app_id IN (SELECT value FROM json_each(@appIds))
+            )))
+          ORDER BY team.created_at DESC, team.id ASC`).all({ spaceId, appIds: JSON.stringify(localAppIds) })
       : this.db.prepare('SELECT * FROM teams WHERE ephemeral = 0 ORDER BY created_at DESC, id ASC').all()
     return (query as TeamRow[]).map(rowToTeam)
   }

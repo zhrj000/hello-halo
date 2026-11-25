@@ -1,18 +1,14 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createElement } from 'react'
-import { renderToStaticMarkup } from 'react-dom/server'
 import type { RosterMember, TeamActivity, TeamConversation, TeamDetail } from '../../../src/shared/apps/team-types'
 
 vi.mock('../../../src/renderer/i18n', () => ({
   useTranslation: () => ({ t: (text: string, vars?: Record<string, unknown>) => text.replace(/\{\{(\w+)\}\}/g, (_, key) => String(vars?.[key])) }),
 }))
-import { addressedMember, capStage, isExchange, orderCrew, recentTalk, rowGroups, talkClusters, talkExpiry, talkLinks, taskCrew, TALK_WINDOW, type CrewEntry } from '../../../src/renderer/components/team/detail/crew'
-import { RowCrew } from '../../../src/renderer/components/team/detail/crew-ui'
+import { addressedMember, capStage, isExchange, orderCrew, recentTalk, talkClusters, talkExpiry, talkLinks, TALK_WINDOW, type CrewEntry } from '../../../src/renderer/components/team/detail/crew'
 import { layoutScene, SCENE_RADIUS } from '../../../src/renderer/components/team/detail/scene-layout'
 
 const NOW = 1_800_000_000_000
 const member = (appId: string, extra: Partial<RosterMember> = {}) => ({ appId, memberName: appId.toUpperCase(), role: '', status: 'idle', ...extra }) as unknown as RosterMember
-const busy = (appId: string, extra: Partial<RosterMember> = {}) => member(appId, { status: 'working', busy: [{ epochId: 'e', label: '' }], ...extra } as Partial<RosterMember>)
 const detailOf = (roster: RosterMember[], extra: Partial<TeamDetail> = {}) => ({ team: { id: 't', name: 'Crew', leadAppId: 'lead' }, roster, activities: [], pendingEscalations: [], ...extra }) as unknown as TeamDetail
 const task = (extra: Partial<TeamConversation> = {}) => ({ epochId: 'e', teamId: 't', kind: 'collab', label: 'Launch', startedAt: 1, lastActivityAt: NOW, ...extra }) as TeamConversation
 const message = (actor: string, target: string, ago: number, extra: Partial<TeamActivity> = {}) => ({
@@ -27,17 +23,6 @@ describe('task crew', () => {
       message('a', 'a', 4), message('a', '', 5), message('a', 'b', 6, { kind: 'task_post' }), message('a', 'b', 7, { kind: 'finding' }),
     ].filter(isExchange).map(activity => activity.id)).toEqual(['a-b-1', 'b-a-2', 'a-b-3'])
   })
-  it('lists members working, waiting or stopped on the task, and nobody once it is finished', () => {
-    const detail = detailOf([busy('a'), busy('b', { status: 'error' }), member('c'), member('d'), member('idle')], {
-      pendingEscalations: [{ appId: 'c', epochId: 'e', question: 'Ship?' }] as TeamDetail['pendingEscalations'],
-    })
-    expect(taskCrew(detail, task({ waitingMemberAppIds: [], failure: { appId: 'd', activityId: 'turn' } }))).toEqual([
-      { appId: 'a', state: 'working' }, { appId: 'b', state: 'failed' }, { appId: 'c', state: 'waiting' }, { appId: 'd', state: 'failed' },
-    ])
-    expect(taskCrew(detail, task({ completed: true }))).toEqual([])
-    expect(taskCrew(detailOf([busy('a', { presence: 'offline' } as Partial<RosterMember>)]), task())).toEqual([{ appId: 'a', state: 'offline' }])
-  })
-
   it('counts delivered messages inside the talk window as talking, keeping one link per pair', () => {
     const recent = recentTalk([
       message('a', 'b', 1_000), message('b', 'a', 5_000), message('a', 'c', TALK_WINDOW + 1),
@@ -55,7 +40,6 @@ describe('task crew', () => {
     const crew: CrewEntry[] = [...entries('a', 'b', 'c'), { appId: 'd', state: 'waiting' }, ...entries('lead')]
     const ordered = orderCrew(crew, links)
     expect(ordered.map(entry => entry.appId)).toEqual(['d', 'c', 'b', 'lead', 'a'])
-    expect(rowGroups(ordered, links).map(group => group.map(entry => entry.appId))).toEqual([['d', 'c'], ['b', 'lead'], ['a']])
     expect(talkClusters(['a', 'lead', 'b'], [{ a: 'a', b: 'lead', at: 1 }, { a: 'lead', b: 'b', at: 1 }])).toEqual([['a', 'lead', 'b']])
 
     const many = entries('lead', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h')
@@ -102,43 +86,7 @@ describe('scene layout', () => {
   })
 })
 
-describe('row crew', () => {
-  it('shows who is on the task, overlapping those talking, folding the rest into +N', () => {
-    vi.useFakeTimers({ now: NOW })
-    const detail = detailOf([busy('lead'), busy('a'), busy('b'), busy('c'), busy('d')])
-    const recent = [message('a', 'lead', 1_000)]
-    const html = renderToStaticMarkup(createElement(RowCrew, { detail, task: task(), recent, cap: 3, size: 22 }))
-    expect(html).toContain('+2')
-    expect(html.match(/-ml-\[5px\]/g)).toHaveLength(1)
-    expect(html).not.toContain('avatar-blink')
-    expect(html).toContain('A · Talking with LEAD')
-    expect(html).toContain('LEAD · Talking with A')
-    expect(html).toContain('D · Working')
-    expect(html).toContain('5 on it now')
-    expect(html).toContain('A → LEAD')
-    expect(html).not.toContain('took part')
-    expect(renderToStaticMarkup(createElement(RowCrew, { detail, task: task({ completed: true }), recent, cap: 3, size: 22 }))).toBe('')
-    vi.useRealTimers()
-  })
-
-  it('stacks who took part: in full once finished, faded past a divider while others still work', () => {
-    const roster = ['lead', 'a', 'b', 'c', 'd', 'e'].map(id => member(id))
-    const done = renderToStaticMarkup(createElement(RowCrew, {
-      detail: detailOf(roster), task: task({ completed: true, participantAppIds: ['lead', 'a', 'b', 'c', 'd', 'e', 'gone'] }), recent: [], cap: 3, size: 22,
-    }))
-    expect(done).toContain('6 took part: LEAD, A, B, C, D, E')
-    expect(done).toContain('+2')
-    expect(done).not.toContain('opacity-50')
-    expect(done).not.toContain('GONE')
-
-    const live = renderToStaticMarkup(createElement(RowCrew, {
-      detail: detailOf([busy('lead'), member('a'), member('b')]), task: task({ participantAppIds: ['lead', 'a', 'b'] }), recent: [], cap: 3, size: 22,
-    }))
-    expect(live).toContain('LEAD · Working, 2 took part, free now: A, B')
-    expect(live).toContain('w-px')
-    expect(live).toContain('opacity-50')
-  })
-
+describe('addressed member', () => {
   it('names the teammate a question went to directly, never the lead or an IM bot', () => {
     const detail = detailOf(['lead', 'a'].map(id => member(id)))
     expect(addressedMember(detail, task({ kind: 'native', memberAppId: 'a' }))).toBe('a')

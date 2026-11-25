@@ -4,17 +4,18 @@ import type { TeamConversation, TeamDetail } from '../../../../shared/apps/team-
 import type { TeamTaskViewMemory } from '../../../services/canvas-lifecycle'
 import { useConfirmDialog } from '../../../hooks/useConfirmDialog'
 import { useTranslation } from '../../../i18n'
-import { useAppsStore } from '../../../stores/apps.store'
+import { useCollabMemberViewStore } from '../../../stores/collab-member-view.store'
 import { useTeamStore } from '../../../stores/team.store'
+import { useTeamViewPrefsStore } from '../../../stores/team-view-prefs.store'
+import { navigateToConversation } from '../../../utils/conversation-navigation'
 import { openTeamConversation } from '../../../utils/team-conversation-navigation'
 import { KeepTeam } from '../TeamTaskOverview'
-import { orderTaskMembers } from '../workbench/member-rail'
-import { detailForTask, ownedTaskMembers } from '../workbench/members'
+import { detailForTask } from '../workbench/members'
 import type { TaskActivityKind } from '../workbench/model'
 import { useTaskActivity } from '../workbench/useTaskActivity'
 import { useTaskBoard } from '../workbench/useTaskBoard'
+import { CollaborationRecord } from './CollaborationRecord'
 import { useHeldDecisions } from './DecisionCard'
-import { MemberWork } from './MemberWork'
 import { PanelBar, PanelClose } from './PanelBar'
 import { isTeamWork } from './status'
 import { imChannelName, PANEL_ACTION, taskTitle } from './task-ui'
@@ -23,12 +24,34 @@ import { TaskBody, useTaskOverview } from './TaskBody'
 export interface TaskPanelReveal {
   seq: number
   activityId?: string
-  memberAppId?: string
   decisionId?: string
 }
 
+/**
+ * Where a member of this task is talked to: the task's homepage conversation, on
+ * that member — the same move as the progress beside a homepage chat. A temporary
+ * team's member lives in the conversation that leads it. Null where Halo has no
+ * conversation to turn to (an IM chat is answered in the IM app), so the member's
+ * part is shown in the record instead.
+ */
+export function taskMemberDestination(detail: TeamDetail, task: TeamConversation, taskSpaceId: string | null): ((appId: string) => void) | null {
+  if (task.kind === 'collab') {
+    const source = task.sourceConversation
+    if (!source) return null
+    return appId => {
+      useCollabMemberViewStore.getState().open(source.conversationId, appId)
+      navigateToConversation(source.spaceId, source.conversationId)
+    }
+  }
+  if (task.kind === 'im' || task.readonly || !taskSpaceId) return null
+  return appId => {
+    useTeamViewPrefsStore.getState().rememberTaskMember(detail.team.id, task.epochId, appId)
+    openTeamConversation(taskSpaceId, { teamId: detail.team.id, epochId: task.epochId, teamName: detail.team.name, label: task.label, appId })
+  }
+}
+
 /** One task, read like an AI client's answer: the lead's brief, the plan as steps, and what came out. */
-export function TaskPanel({ detail: teamDetail, task, taskSpaceId, docked, memory, reveal, onRevealHandled, onClose, onOpenTask }: {
+export function TaskPanel({ detail: teamDetail, task, taskSpaceId, docked, memory, reveal, onRevealHandled, onClose }: {
   detail: TeamDetail
   task: TeamConversation
   taskSpaceId: string | null
@@ -37,15 +60,14 @@ export function TaskPanel({ detail: teamDetail, task, taskSpaceId, docked, memor
   reveal?: TaskPanelReveal
   onRevealHandled: (seq: number) => void
   onClose: () => void
-  onOpenTask?: (epochId: string) => void
 }) {
   const { t } = useTranslation()
   const baseDetail = useMemo(() => detailForTask(teamDetail, task), [teamDetail, task])
   const boardState = useTaskBoard(baseDetail, task.epochId)
   // A temporary team's members join this one task, so only its board lists them.
   const detail = useMemo(() => detailForTask(teamDetail, task, boardState.board), [teamDetail, task, boardState.board])
-  const [drill, setDrill] = useState<string | null>(memory.memberAppId ?? null)
-  const [all, setAll] = useState(!memory.memberAppId && !!memory.allMembers)
+  // The record, open on everyone (null member) or, where the task has no conversation to turn to, on one member.
+  const [record, setRecord] = useState<{ member: string | null } | null>(memory.allMembers || memory.memberAppId ? { member: memory.memberAppId ?? null } : null)
   const [open, setOpen] = useState<Record<string, boolean>>(memory.open ?? {})
   const [focus, setFocus] = useState<{ seq: number; activityId: string } | null>(null)
   const [kind, setKind] = useState<TaskActivityKind | null>(null)
@@ -53,31 +75,26 @@ export function TaskPanel({ detail: teamDetail, task, taskSpaceId, docked, memor
   const titleRowRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     memory.open = open
-    memory.memberAppId = drill ?? undefined
-    memory.allMembers = all || undefined
-  }, [memory, open, drill, all])
-  const data = useTaskActivity(detail, task, boardState, !drill)
+    memory.memberAppId = record?.member ?? undefined
+    memory.allMembers = record ? true : undefined
+  }, [memory, open, record])
+  const data = useTaskActivity(detail, task, boardState)
   const held = useHeldDecisions(data.pending)
-  const apps = useAppsStore(state => state.apps)
-  const owned = useMemo(() => ownedTaskMembers(detail, apps).map(member => member.appId), [detail, apps])
 
-  const lastMember = useRef(memory.memberAppId ?? null)
-  const openMember = (appId: string) => {
-    lastMember.current = appId
-    setAll(false)
-    setDrill(appId)
-  }
+  const talkTo = taskMemberDestination(detail, task, taskSpaceId)
   const openAll = () => {
-    setDrill(null)
-    setAll(true)
+    setRecord({ member: null })
     setFocus(null)
   }
-  const closeTalk = () => {
-    setDrill(null)
-    setAll(false)
+  // A member opens where the task is talked about; with nowhere to talk, the record narrows to them.
+  const openMember = (appId: string) => {
+    if (talkTo) return talkTo(appId)
+    setRecord({ member: appId })
+    setFocus(null)
   }
+  const closeRecord = () => setRecord(null)
   const showActivity = (activityId: string, seq: number) => {
-    openAll()
+    setRecord({ member: null })
     setFocus({ seq, activityId })
   }
   const handled = useRef(onRevealHandled)
@@ -86,9 +103,8 @@ export function TaskPanel({ detail: teamDetail, task, taskSpaceId, docked, memor
   pendingRef.current = data.pending
   useEffect(() => {
     if (!reveal) return
-    if (reveal.memberAppId) openMember(reveal.memberAppId)
-    else if (reveal.decisionId) {
-      closeTalk()
+    if (reveal.decisionId) {
+      closeRecord()
       const decision = pendingRef.current.find(item => item.entryId === reveal.decisionId)
       if (decision) held.setAnswering(decision)
     } else if (reveal.activityId) showActivity(reveal.activityId, reveal.seq)
@@ -97,14 +113,10 @@ export function TaskPanel({ detail: teamDetail, task, taskSpaceId, docked, memor
   }, [reveal])
 
   const overview = useTaskOverview(detail, task, data)
-  const { progress } = overview
-  const tookPart = new Set(progress.members.map(row => row.appId))
-  const byMember = (lastMember.current && tookPart.has(lastMember.current) ? lastMember.current : null)
-    ?? orderTaskMembers(detail.roster.filter(member => tookPart.has(member.appId)), owned)[0]?.appId
 
   const openConversation = () => {
     if (!taskSpaceId) return
-    openTeamConversation(taskSpaceId, { teamId: detail.team.id, epochId: task.epochId, teamName: detail.team.name, label: task.label, appId: drill && owned.includes(drill) ? drill : undefined })
+    openTeamConversation(taskSpaceId, { teamId: detail.team.id, epochId: task.epochId, teamName: detail.team.name, label: task.label })
   }
   const endTask = useEndTask(detail.team.id, task.epochId, task.createdByMe ? undefined : task.startedBy, overview.stateKey === 'waiting_member' || overview.stateKey === 'waiting_user')
   // Team work that is not running, waiting on others included, can be closed by hand, on the team's host only.
@@ -116,11 +128,8 @@ export function TaskPanel({ detail: teamDetail, task, taskSpaceId, docked, memor
     : <button onClick={openConversation} disabled={!taskSpaceId} className={PANEL_ACTION}>{t('Open conversation')}<span aria-hidden="true">↗</span></button>
   const title = taskTitle(detail, task, t)
 
-  const drilled = drill ? detail.roster.find(member => member.appId === drill) : undefined
-  if (drilled || all) return <MemberWork detail={detail} task={task} member={drilled} progress={progress} boardState={boardState} data={data} focus={focus} kind={kind} onKindChange={setKind}
-    owned={!!drilled && owned.includes(drilled.appId)} docked={docked}
-    lockedReason={task.kind === 'im' ? t('Reply in {{channel}}', { channel: imChannelName(task, t) }) : undefined} onContinue={task.kind === 'im' || !taskSpaceId ? undefined : openConversation}
-    onAll={openAll} onByMember={byMember ? () => openMember(byMember) : undefined} onDrill={openMember} onBack={closeTalk} onClose={onClose} onActivity={activityId => activityId ? showActivity(activityId, Date.now()) : closeTalk()} onOpenTask={onOpenTask} />
+  if (record) return <CollaborationRecord detail={detail} task={task} data={data} member={record.member ? detail.roster.find(member => member.appId === record.member) : undefined}
+    focus={focus} kind={kind} onKindChange={setKind} docked={docked} onOpenMember={talkTo ?? undefined} onEveryone={openAll} onBack={closeRecord} onClose={onClose} />
 
   // Docked, the action and the way out sit beside the title; once it scrolls away a slim bar keeps them in reach.
   const onScroll = (top: number) => {

@@ -5,6 +5,7 @@ import { useCanvasActions } from '../../../hooks/useCanvasLifecycle'
 import { useIsMobile } from '../../../hooks/useIsMobile'
 import { TeamViewContext, useTeamStore } from '../../../stores/team.store'
 import { TeamTaskProgress } from '../../team/TeamTaskProgress'
+import { ReplyInConversationContext } from '../../team/team-page-host'
 import { useTranslation } from '../../../i18n'
 
 export function TeamTaskViewer({ tab }: { tab: TabState }) {
@@ -24,10 +25,13 @@ export function TeamTaskViewer({ tab }: { tab: TabState }) {
   if (detail) {
     return (
       <TeamViewContext.Provider value={teamId}>
+        {/* On a phone the canvas covers the chat, so a question is answered here. */}
+        <ReplyInConversationContext.Provider value={!isMobile}>
         <TeamTaskProgress key={`${teamId}:${target.epochId}`} spaceId={target.spaceId} epochId={target.epochId} teamDetail={detail} memory={tab.view.teamTask ??= {}} reveal={tab.reveal}
           onRevealHandled={seq => consumeReveal(tabId.current, seq)}
           // On mobile the canvas covers the conversation, so leaving for it closes the canvas.
           onLeave={isMobile ? () => setOpen(false) : undefined} openFile={openFile} />
+        </ReplyInConversationContext.Provider>
       </TeamViewContext.Provider>
     )
   }

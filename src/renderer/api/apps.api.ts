@@ -12,7 +12,7 @@ import {
 import type {
   ApiResponse,
 } from './_shared'
-import type { ActivityEntry, AutomationAppState, AvailableSkill, EscalationAnswerPayload, InstalledApp, PendingDecisionQuery, AppChatEngineMetadata, AppChatTranscriptPage, AppChatInjectRequest } from '../../shared/apps/app-types'
+import type { ActivityEntry, AutomationAppState, AvailableSkill, EscalationAnswerPayload, InstalledApp, PendingDecisionQuery, AppChatEngineMetadata, AppChatTranscriptPage, AppChatInjectRequest, AppChatInjectResult } from '../../shared/apps/app-types'
 import type { AppSpec } from '../../shared/apps/spec-types'
 import type { CapabilityInventory } from '../../shared/apps/capability-inventory'
 import type { AppSpaceChangePreview } from '../../shared/apps/app-environment'
@@ -469,7 +469,7 @@ export const appsApi = {
   // Add a message to the turn a digital human is running. delivered is false when
   // no turn was in flight to take it — the caller sends it as a new message —
   // and stopped says the user stopped that turn, so the text goes back to them.
-  appChatInject: async (input: AppChatInjectRequest): Promise<ApiResponse<{ delivered: boolean; stopped?: boolean }>> => {
+  appChatInject: async (input: AppChatInjectRequest): Promise<ApiResponse<AppChatInjectResult>> => {
     if (isElectron()) {
       return window.halo.appChatInject(input)
     }
@@ -481,7 +481,16 @@ export const appsApi = {
     })
   },
 
-  appChatStatus: async (appId: string, conversationId?: string): Promise<ApiResponse<{ isGenerating: boolean; conversationId: string }>> => {
+  // Take back a message still waiting behind a turn that serves someone else
+  // (`afterTurn` from appChatInject); withdrawn is false once its turn began.
+  appChatWithdraw: async (input: { appId: string; conversationId: string; message: string }): Promise<ApiResponse<{ withdrawn: boolean }>> => {
+    if (isElectron()) {
+      return window.halo.appChatWithdraw(input)
+    }
+    return httpRequest('POST', `/api/apps/${input.appId}/chat/withdraw`, { conversationId: input.conversationId, message: input.message })
+  },
+
+  appChatStatus: async (appId: string, conversationId?: string): Promise<ApiResponse<{ isGenerating: boolean; conversationId: string; servesOther?: 'colleague' | 'guest' }>> => {
     if (isElectron()) {
       return window.halo.appChatStatus(appId, conversationId)
     }

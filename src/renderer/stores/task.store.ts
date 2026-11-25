@@ -14,10 +14,10 @@ import { usePulseItems } from './chat.store'
 import { useAppsStore, useAutomationTaskItems } from './apps.store'
 import { resolveSpecI18n } from '../utils/spec-i18n'
 import { useSpaceNameResolver } from './space.store'
-import { useTeamStore } from './team.store'
+import { useTeamTaskNeeds, type TeamTaskNeed } from './team-task-items.store'
+import { teamTaskKey } from './team-chat-pins.store'
 import type { PulseItem, TaskItem, TaskItemStatus } from '../types'
 import type { InstalledApp } from '../../shared/apps/app-types'
-import type { TeamListItem } from '../../shared/apps/team-types'
 
 function conversationToTaskItem(item: PulseItem, apps: InstalledApp[]): TaskItem {
   if (item.appId) return digitalHumanConversationToTaskItem(item, item.appId, apps)
@@ -65,20 +65,24 @@ function digitalHumanConversationToTaskItem(item: PulseItem, appId: string, apps
 }
 
 /**
- * A team that owes the user a decision. Teams are not space-scoped, so the
- * space name stays empty and the panel renders no workspace pill for them.
+ * One team task that needs the user, named by the task and placed in the space
+ * it opens in; its line says which team and why.
  */
-function teamToTaskItem(team: TeamListItem): TaskItem {
+export function teamTaskToTaskItem({ task, status }: TeamTaskNeed): TaskItem {
+  const why = status === 'waiting' ? i18n.t('Needs your reply')
+    : status === 'error' ? (task.failure?.reason?.split('\n')[0] || i18n.t('Errored'))
+      : i18n.t('Completed')
   return {
-    key: `team:${team.id}`,
+    key: teamTaskKey(task.teamId, task.epochId),
     source: 'team',
-    status: 'waiting',
-    title: team.name,
-    detail: i18n.t('Waiting for your decision'),
-    spaceId: null,
+    status,
+    title: task.label || i18n.t('New team conversation'),
+    detail: `${task.teamName} · ${why}`,
+    spaceId: task.spaceId,
     spaceName: '',
-    updatedAt: team.updatedAt,
-    teamId: team.id,
+    updatedAt: Math.max(task.lastActivityAt, task.finishedAt ?? 0),
+    teamId: task.teamId,
+    epochId: task.epochId,
   }
 }
 
@@ -102,7 +106,7 @@ export function useTaskItems(): TaskItem[] {
   const automationItems = useAutomationTaskItems()
   const apps = useAppsStore(state => state.apps)
   const hasFullAppList = useAppsStore(state => state.hasFullList)
-  const teams = useTeamStore(state => state.teams)
+  const teamNeeds = useTeamTaskNeeds()
   const spaceName = useSpaceNameResolver()
 
   return useMemo(() => {
@@ -124,14 +128,17 @@ export function useTaskItems(): TaskItem[] {
           return { ...task, spaceName: resolveSpaceName(task.spaceId) }
         }),
       ...automationItems.map(item => ({ ...item, spaceName: resolveSpaceName(item.spaceId) })),
-      ...teams.filter(team => !team.ephemeral && team.hasWaitingUser).map(teamToTaskItem),
+      ...teamNeeds.map(need => {
+        const task = teamTaskToTaskItem(need)
+        return { ...task, spaceName: resolveSpaceName(task.spaceId) }
+      }),
     ]
 
     return items.sort((a, b) => {
       const priorityDiff = STATUS_PRIORITY[a.status] - STATUS_PRIORITY[b.status]
       return priorityDiff !== 0 ? priorityDiff : b.updatedAt - a.updatedAt
     })
-  }, [pulseItems, automationItems, apps, hasFullAppList, teams, spaceName])
+  }, [pulseItems, automationItems, apps, hasFullAppList, teamNeeds, spaceName])
 }
 
 export interface TaskItemCounts {

@@ -39,15 +39,28 @@ Native team conversations open in the homepage through the team module's public
 outputs, collaboration history and member execution) opens as a `team-task` tab in
 the right canvas instead of a drawer; the tab reads its own board for the task, and
 reopening it reuses the tab and reveals the requested record or member.
-The Teams page is for viewing, never chatting. It is one task list (decisions waiting
-on the user first, set aside while a panel is open, since they may belong to other tasks
-and their rows still say so) with no section tabs: the member strip in the header (and the
+Team work is handled there: a notification about a task, and the task panel's entry
+for a team waiting on the user, open that task's homepage conversation in its space,
+on the member concerned and at the waiting decision (`openTeamWork`); the Teams page
+is only where they land when the task cannot be shown there (a temporary
+collaboration, or a team or space not on this computer). The list unfolds the task's
+group and scrolls to its row, a team with a question waiting opens its group on its
+own, and a folded group carries its most urgent task's dot. A toast about the task on
+screen is not shown.
+The Teams page is for viewing, never chatting. It is one task list with no section tabs
+and no separate "Needs you" board: what waits on the user is answered in its task's
+homepage conversation, and here it heads the list as "Awaiting your confirmation". A
+question's "Reply in conversation ↗" anywhere on the page, or in a task's team progress,
+opens that conversation at the question (`replyTarget`); only the team progress covering
+the chat on a phone answers in place. The member strip in the header (and the
 collapsed bar's team avatar) opens the members as a page in place of the list, where a task
 opened stays beside it; a gear opens team settings the same way at a narrower width (closing
-any open panel), and Invite sits beside Run. "Needs you" shows its first item in full and the
-rest one line each; several tasks stopped on the same model problem merge into one card
-naming how many, with Change model and the tasks involved behind an expander, and its count
-is every item it holds. The list then groups tasks: "Awaiting your confirmation", "In
+any open panel), and Invite sits beside Run. Its back arrow returns where the page was
+opened from: a page opened from the homepage (a team avatar or "View in team" in the
+conversation list, the team name in the progress beside a chat) goes back to the
+conversation that was on screen, simply shown again when it is still selected there
+(`openPersonTeam` remembers it, `returnToConversation`); one picked from the team list
+goes back to the list. The list groups tasks: "Awaiting your confirmation", "In
 progress", "Waiting on others", every other open task under "Not in progress" (named for
 what all of them share, as work merely left quiet sits there too; each row says why it
 stopped), "Completed"
@@ -69,9 +82,9 @@ conversation is an outward action ("Start task", "Open conversation", "Chat with
 an AI client's answer: a brief card, decisions answered in place, the team scene, the
 lead's plan as a subtask timeline headed "Work process" with "Subtasks done/total", and
 its outputs. The
-way into the members' conversations ("Member conversations · N exchanges", counting
+way into the collaboration record ("Collaboration record · N exchanges", counting
 messages and replies between members) closes the scene, under its latest exchanges;
-without a scene it closes the panel. It has no transcript or composer.
+without a scene it closes the panel. The panel has no transcript or composer.
 "Open conversation" opens the task on the homepage in place: a conversation someone
 started reopens, and a scheduled, manual or webhook run opens as a conversation of its
 own that joins the homepage list once a person writes into it. A task someone else
@@ -79,12 +92,12 @@ started opens the same way: the user writes through their own digital human ther
 A step unfolds in place into that step alone (`subtaskRecord`): what it was asked (the
 poster's first message to the assignee after posting it, before their next step was
 posted), its status updates, and its closing note and result file. Exchanges between
-members live with the members' conversations. Steps form one
+members live in the collaboration record. Steps form one
 timeline with no time column, done first, then failed, waiting, running and not
 started. The brief card above already tells what went wrong or waits, so such a step
 is only its colored node and a word beside its member (the reason on hover); waiting
 ones carry Answer. Each step opens with a row level with its node, its
-member with an avatar (opening that member's work in this task) and, at the right, when
+member with an avatar (turning to that member, as below) and, at the right, when
 it started and how long it took (running: so far); the title follows, since delegated
 titles are long message openings; then one line of what it did: a running step's latest
 progress, a finished step's closing note (its first line that is not the title) and its
@@ -101,15 +114,14 @@ Hierarchy comes from type and space; the team scene is the panel's only grey sur
 and the brief its only bordered card (`BriefCard`), one faint-bordered shell in every
 state, never a side bar. Running, its small heading says the kind of news (progress;
 needs attention in amber or red with a matching dot, the card then faintly tinted and
-bordered in that color; the team page's "Needs you" cards wear the same tint without a
-border, `toneSurface`; progress and results stay untinted). Work stopped partway heads
+bordered in that color; a decision card wears the same tint, `toneSurface`; progress and results stay untinted). Work stopped partway heads
 "Stopped partway" in amber, untinted, as nothing went wrong. Work held only on someone else's answer (a
 member waiting for its own owner) is amber in heading and dot but untinted, as nothing
 is the user's: one such hold heads the card "Waiting for X to confirm · Waited N",
 its line says who asked with the question under it in up to two lines, and, with no
 subtask moving, the footer leads to that member's work. Each line that needs the user opens with the
-member's face before their name, both leading to that member's work inside the team
-(the panel's member view, never the sidebar's conversation list); the panel adds no
+member's face before their name, both turning to that member as everywhere else in the
+panel; the panel adds no
 buttons, its decision cards sit right below. A footer past a
 hairline names who is working on which subtask (not those failed or waiting, told above), leading to their work (else how many
 subtasks run). It names only what the status line does not.
@@ -128,27 +140,27 @@ it stands in (`finalReplyText`, read from the transcripts activity already loads
 extra read), unless it is too short to be more than an acknowledgement. The leftover
 lines are read off the board, so they carry no avatar. The outputs section is absent while nothing is listed: files a
 command wrote are never listed, so the page cannot claim there are none.
-Panels go one level deep: the members' conversations (`detail/MemberWork`) are one
-board at the homepage conversation's width, with two views, "All exchanges" and "By
-member": tabs at the start of a row under the panel bar, the type filter as text at its
-end. The row sits outside the record's scroll, on its column, above a full-width rule the
-record scrolls under, so it stays put while reading and switching. "By member" is laid out
-as the homepage conversation: the homepage's own member rail above a locked composer, whose
-status returns to the task overview. The rail lists only who took part in this task (the lead
-included), so picking a member never lands on an empty transcript. Nothing is sent from the Teams page, so the composer
-says the conversation continues on the homepage and offers the way there (an IM chat names
-its app instead); a teammate's member keeps the homepage's own read-only wording. "All
-exchanges" has no rail and no composer: the homepage has no such conversation to continue,
-and every card's avatar already opens its member. "All exchanges" is every exchange and report
-in the task on one timeline, newest first; it is the only place
+Panels go one level deep. The collaboration record (`detail/CollaborationRecord`) is one
+board at the homepage conversation's width: its title, with the type filter as text at the
+end of the same row, sits under the panel bar outside the record's scroll, on its column,
+above a full-width rule the record scrolls under, so it stays put while reading. It is
+every exchange and report in the task on one timeline, newest first; it is the only place
 members on other computers show what they said when their transcripts cannot be read.
-"By member" is one member's work in this task under one line of whose it is and what it
-is doing; switching to it reopens the member last viewed in this panel if they took part,
-else the first in rail order. The scene's conversations line opens "All exchanges"; an avatar anywhere
-(the scene, the lead's summary, a step, a record) opens that member; a link to one
-exchange opens "All exchanges" at it. The raw execution record is one step further; a task opened from a member panel
-replaces it with that task. Opening a task from its list always starts at the overview. An IM chat is answered in its IM app and is not hosted on the
-homepage, so its panel only says so and its members offer no way on. Task rows say
+It has no member rail and no composer. The Teams page never shows a member's conversation
+as a chat, not even locked: a chat that cannot be answered only confuses, and talking is
+the homepage's. A member, wherever the panel shows one (the scene and its standby pile,
+the brief, the lead's summary, a step, a record card's avatar), turns to them where the
+task is talked about, the same move as the progress beside a homepage chat
+(`taskMemberDestination`): the task's homepage conversation on that member, or, for a
+temporary team's member, the conversation that leads it. A task with no conversation
+here (an IM chat, answered in its IM app; a watch-only task; a space not on this computer)
+has nowhere to turn, so a member narrows the record to their own part, with a chip that
+shows everyone again; that member's raw execution record (the turns as they ran, read only)
+is one step further, the one way into it the page keeps, since the homepage keeps its own
+beside the conversation. Its record cards' avatars lead nowhere. The scene's record line
+opens the record; a link to one exchange opens it at that exchange. Opening a task, from
+its list or a member panel's tasks, always starts at the overview. An IM chat's panel
+says it is answered in its app instead of offering the conversation. Task rows say
 where work nobody here started came from (the run's trigger, the IM app), then on the
 same line under the title what it produced, its subtasks and when it last moved;
 finished or quiet work leaves its state to the leading icon and its group: a blue dot
@@ -181,7 +193,7 @@ only those who took no part. Unfinished work nobody is on keeps the scene too, n
 would read as "online" there, a little larger than the other dots so the check stays legible;
 the check is the stage's alone, and switchers, rails and lists keep the plain dot. The stage and that pile keep one height, so members joining
 or leaving slide into place instead of resizing the card; reduced motion drops the
-slide and the blink. Under them, only while someone is working, the one exchange still inside the talk window (failed deliveries left out, Markdown marks dropped), opening "All exchanges" at itself; otherwise just the "All exchanges" link. A run is titled by
+slide and the blink. Under them, only while someone is working, the one exchange still inside the talk window (failed deliveries left out, Markdown marks dropped), opening the collaboration record at itself; otherwise just the record's link. A run is titled by
 its summary, else as work toward the team goal, never by the team's name again. Under
 the team name one line says where the team stands (a failure, a decision for me, how
 many tasks are live, else idle) and what it finished this month with how many outputs. Both entry

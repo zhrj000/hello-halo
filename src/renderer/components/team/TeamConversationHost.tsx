@@ -120,7 +120,7 @@ function TeamConversationRoom({ spaceId, target, teamDetail }: { spaceId: string
     {chosen && !selectedAppId && <p role="status" className="px-4 py-2 text-xs text-muted-foreground">{t('This member is unavailable. Choose another member to continue.')}</p>}
     <TaskRoom key={room.key} homepageConversation detail={detail} task={task} selectedAppId={selectedAppId}
       blocked={!!detail.legacyCoordinator} boardState={board} tasks={conversations.filter(item => item.kind === 'native' || item.kind === 'run')}
-      decisionTarget={target.decision ? target.entryId : undefined} onSelectMember={onMember} onCreated={onCreated}
+      decisionTarget={target.decision ? target.entryId : undefined} decisionSeq={target.revealSeq} onSelectMember={onMember} onCreated={onCreated}
       onTask={onTask} onActivity={activityId => openProgress(activityId ? { activityId } : undefined)} onExecution={memberAppId => openProgress({ memberAppId })} />
   </div>
 }

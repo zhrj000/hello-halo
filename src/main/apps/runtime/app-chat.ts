@@ -585,6 +585,16 @@ export function sendAppChatMessage(request: AppChatRequest): Promise<void> {
   return chatDelivery.send(request)
 }
 
+/**
+ * Take back the owner's message still waiting behind the running turn of
+ * `conversationId`. False once it is no longer waiting (its turn began).
+ */
+export function withdrawWaitingAppChatMessage(conversationId: string, message: string): boolean {
+  const taken = chatDelivery?.withdraw(conversationId, message) ?? false
+  console.log(`[AppChat] Withdraw waiting message: conversation=${conversationId} taken=${taken}`)
+  return taken
+}
+
 function assertCollaborationDelivery(request: AppChatRequest): void {
   const context = request.teamContext
   if (!context) return
@@ -1834,10 +1844,12 @@ async function runAppChatTurn(
           triggerKind: teamContext?.personalChat ? 'human_message' : teamContext?.kind ?? 'human_message',
           ...(servedOrigin ? { origin: servedOrigin } : {}),
           ...(teamRequestId ? { requestId: teamRequestId } : {}),
+          // Every turn's closing words: the lead's answer to a person is what the
+          // task-end notification shows; the lead's report ignores human turns.
+          ...(finalReply ? { finalReply } : {}),
           ...(teamContext?.kind && teamContext.kind !== 'human_message' && !teamContext.personalChat ? {
             requestSummary: message.replace(/^\[[^\]\n]+\]\s*/, ''),
             requestFromAppId: teamContext.fromAppId,
-            finalReply,
           } : {}),
         }, { report: (!request.internalAssistantResult || !!participant
           || request.recordedMessages?.some(input => input.provenance?.source !== 'team-message'

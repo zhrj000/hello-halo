@@ -68,6 +68,20 @@ Rows are contained (see `row.ts`):
   page prepended in front must not rebuild the rows below it, and an optimistic
   message keeps its bubble when its persisted twin arrives (`Message.clientKey`).
 
+## When a message was sent
+
+Times stay out of the way: no time on each message and nothing floating over
+the transcript. `MessageList` draws one quiet line inside the row of each
+message that begins a stretch of conversation — it opens a calendar day, or
+follows the previous message after a pause of five minutes or more
+(`startsNewSegment` in `message-time.ts`). The line names the day where a day
+opens and anywhere before today ("October 22 11:10"), and is the time alone
+for a pause later today, so a reader dropped into old history still sees the
+date. Whether a row begins a stretch is decided from the loaded messages,
+never from which rows are mounted, so a page of older history never moves a
+line. The line is part of its row, so keys, indices and measured placeholder
+heights stay one per message.
+
 ## Scroll ownership
 
 Only these hooks write the transcript's `scrollTop`. Surfaces call

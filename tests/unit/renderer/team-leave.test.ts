@@ -51,10 +51,6 @@ vi.mock('../../../src/renderer/stores/team.store', () => {
   const state = { teams: [], ...h.store }
   return { useTeamStore: (select: (s: typeof state) => unknown) => select(state) }
 })
-vi.mock('../../../src/renderer/stores/team-view-prefs.store', () => ({
-  useOfficeSkin: () => 'cartoon',
-  useTeamViewPrefsStore: (select: (s: unknown) => unknown) => select({ setOfficeSkin: () => {} }),
-}))
 vi.mock('../../../src/renderer/stores/apps.store', () => ({
   useAppsStore: (select: (s: unknown) => unknown) => select({ apps: h.apps }),
 }))

@@ -22,7 +22,11 @@ import { TaskStatusDot } from '../pulse/TaskStatusDot'
 import { appChatSessionLabel } from './conversation-row-format'
 import { trackHome } from '../../services/home-telemetry'
 import { openDigitalHumanChat } from '../../utils/conversation-navigation'
-import { buildTeamRows, useTeamConversationRows, type TeamListRow } from '../../hooks/useTeamConversationRows'
+import { buildTeamGroups, useTeamConversationRows, type TeamListRow } from '../../hooks/useTeamConversationRows'
+import { teamTaskKey } from '../../stores/team-chat-pins.store'
+import { teamTaskStatus, useTeamChatSeenStore } from '../../stores/team-chat-seen.store'
+import { attentionFirst, attentionRank, headingStatus } from './conversation-list-model'
+import type { TaskStatus } from '../../types'
 import { TeamConversationRow } from './TeamConversationRow'
 import { useConversationListPrefs } from '../../stores/conversation-list-prefs.store'
 
@@ -35,9 +39,9 @@ type HistoryItem =
   | { type: 'conversation'; key: string; conversation: ConversationMeta }
   | { type: 'digital-human'; key: string; row: AppChatConversationRow }
 
-/** Pinned first, then newest — the order the sidebar's pinned section reads in. */
+/** Newest first — the order the sidebar's lists read in. */
 function sortDigitalHumanRows(rows: AppChatConversationRow[]): AppChatConversationRow[] {
-  return [...rows].sort((a, b) => Number(b.starred) - Number(a.starred) || b.updatedAt - a.updatedAt)
+  return [...rows].sort((a, b) => b.updatedAt - a.updatedAt)
 }
 
 // Format relative time
@@ -100,26 +104,50 @@ export function ChatHistoryPanel() {
   const selectedTeamChat = useChatStore(s => s.spaceStates.get(currentSpaceId ?? '')?.selectedTeamChat)
   const groups = useConversationListPrefs(s => s.appGroupOpen[currentSpaceId ?? '']) ?? EMPTY_GROUPS
   const setGroupOpen = useConversationListPrefs(s => s.setAppGroupOpen)
-  const teamRows = useMemo(() => buildTeamRows(teamList.tasks, teamList.teams, teamList.pins,
-    id => groups[`team:${id}`] ?? selectedTeamChat?.teamId === id, teamList.hidden), [teamList.tasks, teamList.teams, teamList.pins, teamList.hidden, groups, selectedTeamChat?.teamId])
+  // The same order as the sidebar: Pinned, Teams, Digital Humans, Conversations,
+  // each with what needs the person first. The sheet lists everything (no "More"),
+  // so it is the place to scroll the whole history.
+  const teamSeen = useTeamChatSeenStore(s => s.seen)
+  const teamSeenSince = useTeamChatSeenStore(s => s.since)
   const historyItems = useMemo<HistoryItem[]>(() => {
-    const conversationItems: HistoryItem[] = conversations.map(conversation => ({ type: 'conversation', key: conversation.id, conversation }))
-    if (appChatRows.length === 0 && teamRows.rows.length === 0 && !teamList.error && !teamList.loading) return conversationItems
+    const statusOf = (key: string): TaskStatus => conversationStatuses.get(key) ?? 'idle'
+    const teamStatus = (task: (typeof teamList.tasks)[number]) => {
+      const key = teamTaskKey(task.teamId, task.epochId)
+      return teamTaskStatus(task, teamSeen[key], teamSeenSince)
+    }
+    const conversationItems: HistoryItem[] = attentionFirst(conversations, conversation => attentionRank(statusOf(conversation.id)))
+      .map(conversation => ({ type: 'conversation', key: conversation.id, conversation }))
+    const teamGroups = buildTeamGroups(teamList.tasks, teamList.teams, teamList.pins, teamList.hidden)
+    if (appChatRows.length === 0 && teamGroups.length === 0 && !teamList.error && !teamList.loading) return conversationItems
+    const teamPinned: HistoryItem[] = teamGroups.flatMap(group => group.pinned.map(task => ({ type: 'team-item' as const, key: teamTaskKey(group.teamId, task.epochId), task, standalone: true, starred: true, avatar: group.avatar, status: teamStatus(task) })))
     const pinned: HistoryItem[] = [
       ...conversationItems.filter(item => item.type === 'conversation' && item.conversation.starred),
       ...sortDigitalHumanRows(appChatRows.filter(row => row.starred)).map((row): HistoryItem => ({ type: 'digital-human', key: row.id, row })),
-      ...teamRows.pinned,
+      ...teamPinned,
     ]
+    const arranged = attentionFirst(teamGroups.map(group => {
+      const tasks = attentionFirst(group.tasks, task => attentionRank(teamStatus(task)))
+      const heading = headingStatus(group.tasks.map(teamStatus))
+      return { group, tasks, heading, rank: attentionRank(heading) }
+    }), entry => entry.rank)
+    const teamItems: HistoryItem[] = arranged.flatMap(({ group, tasks, heading }): HistoryItem[] => {
+      const open = groups[group.key] ?? (heading !== undefined || selectedTeamChat?.teamId === group.teamId)
+      return [
+        { type: 'team-header', key: group.key, teamId: group.teamId, name: group.name, collapsed: !open, avatar: group.avatar, ...(heading ? { attention: heading as Exclude<TaskStatus, 'idle'> } : {}) },
+        ...(open ? tasks.map((task): HistoryItem => ({ type: 'team-item', key: teamTaskKey(group.teamId, task.epochId), task, standalone: false, starred: false, avatar: group.avatar, status: teamStatus(task) })) : []),
+        ...(open && group.hidden > 0 ? [{ type: 'team-hidden' as const, key: `team-hidden:${group.teamId}`, teamId: group.teamId, count: group.hidden }] : []),
+      ]
+    })
+    const humans = attentionFirst(sortDigitalHumanRows(appChatRows.filter(row => !row.starred)), row => attentionRank(statusOf(row.id)))
     return [
       ...(pinned.length ? [{ type: 'header' as const, key: 'header:pinned', label: t('Pinned') }, ...pinned] : []),
-      { type: 'header', key: 'header:digital-humans', label: t('Digital Humans') },
-      ...sortDigitalHumanRows(appChatRows.filter(row => !row.starred)).map((row): HistoryItem => ({ type: 'digital-human', key: row.id, row })),
-      ...teamRows.rows,
+      ...(teamItems.length || teamList.error ? [{ type: 'header' as const, key: 'header:teams', label: t('Teams') }, ...teamItems] : []),
       ...(teamList.error ? [{ type: 'team-retry' as const, key: 'team:retry' }] : []),
+      ...(humans.length ? [{ type: 'header' as const, key: 'header:digital-humans', label: t('Digital Humans') }, ...humans.map((row): HistoryItem => ({ type: 'digital-human', key: row.id, row }))] : []),
       ...(conversationItems.length > 0 ? [{ type: 'header', key: 'header:conversations', label: t('Conversations') } as HistoryItem] : []),
       ...conversationItems.filter(item => item.type === 'conversation' && !item.conversation.starred),
     ]
-  }, [conversations, appChatRows, teamRows, teamList.error, teamList.loading, t])
+  }, [conversations, appChatRows, teamList.tasks, teamList.teams, teamList.pins, teamList.hidden, teamList.error, teamList.loading, groups, selectedTeamChat?.teamId, conversationStatuses, teamSeen, teamSeenSince, t])
   const totalCount = conversations.length + appChatRows.length + teamList.tasks.length
   const [isAnimatingOut, setIsAnimatingOut] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -568,7 +596,7 @@ export function ChatHistoryPanel() {
   }
 
   const renderListItem = (_index: number, item: HistoryItem) => {
-    if (item.type === 'team-header' || item.type === 'team-item' || item.type === 'team-retry' || item.type === 'team-hidden') return <TeamConversationRow
+    if (item.type === 'team-header' || item.type === 'team-item' || item.type === 'team-retry' || item.type === 'team-hidden' || item.type === 'team-empty') return <TeamConversationRow
       row={item} spaceId={currentSpaceId ?? ''} onToggle={(id, open) => setGroupOpen(currentSpaceId ?? '', `team:${id}`, !open)}
       onRefresh={teamList.refresh} onSelected={handleClose} />
     if (item.type === 'header') {

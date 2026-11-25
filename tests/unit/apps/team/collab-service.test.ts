@@ -38,6 +38,7 @@ function makeAppManager() {
       return id
     }),
     getApp: vi.fn((appId: string) => apps.get(appId) ?? null),
+    listApps: vi.fn(({ spaceId }: { spaceId?: string } = {}) => [...apps.values()].filter(app => spaceId === undefined || app.spaceId === spaceId)),
     updateOverrides: vi.fn((appId: string, overrides: Record<string, unknown>) => {
       Object.assign(apps.get(appId)!.userOverrides, overrides)
     }),

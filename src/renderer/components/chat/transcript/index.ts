@@ -15,3 +15,4 @@ export { isArrivalRecord, isArrivalThought, isShownArrival, liveArrivals, mergeA
 export type { ArrivalThought } from './arrivals'
 export { captureTranscriptPosition, restoreTranscriptPosition, centerRowInView, revealRowInView } from './position'
 export type { TranscriptPosition } from './position'
+export { startsNewDay, startsNewSegment, formatDayLabel, formatSegmentLabel, formatMessageClock } from './message-time'

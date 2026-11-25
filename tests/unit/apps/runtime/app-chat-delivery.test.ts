@@ -84,6 +84,28 @@ async function idle(conversationId = KEY): Promise<void> {
 }
 
 describe('digital-human message admission', () => {
+  it('lets the owner take back their message while it waits behind a colleague\'s turn, not after it began', async () => {
+    env.busy = true
+    env.identity = 'colleague'
+    const run = vi.fn(async (_request: AppChatRequest) => {})
+    const delivery = createAppChatDelivery(run)
+    const first = delivery.send(request('use ai-terminal'))
+    const second = delivery.send(request('and keep the logs'))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(env.inject).not.toHaveBeenCalled()
+
+    expect(delivery.withdraw(KEY, ' use ai-terminal ')).toBe(true)
+    await first
+    expect(delivery.withdraw(KEY, 'use ai-terminal')).toBe(false)
+
+    await idle()
+    await second
+    expect(run).toHaveBeenCalledOnce()
+    expect(run.mock.calls[0][0].message).toBe('and keep the logs')
+    expect(delivery.withdraw(KEY, 'and keep the logs')).toBe(false)
+    delivery.dispose()
+  })
+
   it('neither injects nor opens buffered input during scoped maintenance, then drains after release', async () => {
     env.busy = true
     env.identity = 'owner'

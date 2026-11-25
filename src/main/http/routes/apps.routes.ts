@@ -35,6 +35,9 @@ import {
   rejectIfRemoteMcpForbidden,
   restartAppChat,
   injectIntoAppChatWhenLive,
+  appChatAdditionResult,
+  appChatTurnServesOther,
+  withdrawWaitingAppChatMessage,
   sendAppChatMessage,
   stopAppChat,
   stopAppChatConversation,
@@ -1129,9 +1132,32 @@ export function registerAppsRoutes(app: Express): void {
         return
       }
       console.log('[HTTP] POST /api/apps/%s/chat/inject (conversationId=%s, outcome=%s)', appId, conversationId, outcome)
-      res.json({ success: true, data: { delivered: outcome === 'delivered', ...(outcome === 'stopped' ? { stopped: true } : {}) } })
+      res.json({ success: true, data: appChatAdditionResult(outcome, target.conversationId) })
     } catch (error) {
       console.error('[HTTP] POST /api/apps/:appId/chat/inject failed:', error)
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/apps/:appId/chat/withdraw — the person takes back a message still
+  // waiting behind a turn that serves someone else (`afterTurn` from chat/inject).
+  // `withdrawn: false` once its own turn has begun.
+  app.post('/api/apps/:appId/chat/withdraw', async (req: Request, res: Response) => {
+    try {
+      const { appId } = req.params
+      const { conversationId, message } = (req.body ?? {}) as { conversationId?: unknown; message?: unknown }
+      if (typeof conversationId !== 'string' || typeof message !== 'string' || !message.trim()) {
+        res.status(400).json({ success: false, error: 'Missing required fields: conversationId, message' })
+        return
+      }
+      const target = resolveUserInjectTarget(appId, conversationId)
+      if (!target.ok) {
+        res.status(target.status).json({ success: false, error: target.error })
+        return
+      }
+      res.json({ success: true, data: { withdrawn: withdrawWaitingAppChatMessage(target.conversationId, message.trim()) } })
+    } catch (error) {
+      console.error('[HTTP] POST /api/apps/:appId/chat/withdraw failed:', error)
       res.json({ success: false, error: (error as Error).message })
     }
   })
@@ -1190,6 +1216,7 @@ export function registerAppsRoutes(app: Express): void {
           data: {
             isGenerating: isAppChatConversationGenerating(target.conversationId),
             conversationId: target.conversationId,
+            ...(appChatTurnServesOther(target.conversationId) ? { servesOther: appChatTurnServesOther(target.conversationId) } : {}),
           }
         })
         return

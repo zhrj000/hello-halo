@@ -74,6 +74,7 @@ export const appRpc = {
   appChatSend: rawRpcMethod('app:chat-send'),
   appChatStop: rawRpcMethod('app:chat-stop'),
   appChatInject: rawRpcMethod('app:chat-inject'),
+  appChatWithdraw: rawRpcMethod('app:chat-withdraw'),
   appChatStatus: rawRpcMethod('app:chat-status'),
   appChatMessages: rawRpcMethod('app:chat-messages'),
   appChatTranscript: rawRpcMethod('app:chat-transcript'),

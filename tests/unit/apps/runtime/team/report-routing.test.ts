@@ -124,6 +124,33 @@ describe('report routing (§5.3)', () => {
     expect(res.content[0].text).toMatch(/report saved/i)
   })
 
+  it('team notification names the team and task in the title and the member in the body', async () => {
+    getActiveTeamRuntime.mockReturnValue({
+      captureReport: capture,
+      blackboard: { postActivity },
+      buildPromptContext: vi.fn(() => ({ escalationRouting: 'user' })),
+      describeTaskSource: vi.fn(() => ({ teamName: 'Crew', label: 'Launch plan', memberName: 'Researcher' })),
+    })
+    const { store, entries } = makeStore()
+    const handler = getReportHandler({ appId: 'app-researcher', appName: 'Crew · Researcher', runId: 'chat', sessionKey: 'app-chat:app-researcher:team:team-1', teamContext: TRIGGER }, store)
+    await handler({ type: 'milestone', message: 'Draft is ready' })
+    expect(notifyAppEvent).toHaveBeenCalledWith('Crew · Launch plan', 'Researcher: Draft is ready', expect.objectContaining({ teamId: 'team-1', epochId: 'epoch-1' }))
+    expect(entries[0].content.source).toMatchObject({ teamName: 'Crew', label: 'Launch plan' })
+    expect(entries[0].content.source).not.toHaveProperty('memberName')
+  })
+
+  it('a team member waiting on a person notifies even when its own notifications are off', async () => {
+    const { store } = makeStore()
+    const quiet = { appId: 'app-researcher', appName: 'Researcher', runId: 'chat', sessionKey: 'app-chat:app-researcher:team:team-1', teamContext: TRIGGER, notificationLevel: 'none' as const }
+    await getReportHandler(quiet, store)({ type: 'milestone', message: 'Halfway' })
+    expect(notifyAppEvent).not.toHaveBeenCalled()
+    await getReportHandler(quiet, store)({ type: 'escalation', message: 'Skip or wait?' })
+    expect(notifyAppEvent).toHaveBeenCalledTimes(1)
+    const { teamContext: _team, ...solo } = quiet
+    await getReportHandler({ ...solo, sessionKey: 'app-chat:app-researcher' }, store)({ type: 'escalation', message: 'Skip or wait?' })
+    expect(notifyAppEvent).toHaveBeenCalledTimes(1)
+  })
+
   it('team escalation → tagged entry written AND captured as report_escalation', async () => {
     const { store, entries } = makeStore()
     const ctx: ReportToolContext = {

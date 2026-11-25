@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { EscalationAnswer } from '../../shared/apps/app-types'
 import type { TranscriptPosition } from '../components/chat/transcript'
+import type { TeamChatTarget } from './chat.store'
 
 export interface TeamNavigationTarget {
   teamId: string
@@ -9,6 +10,16 @@ export interface TeamNavigationTarget {
   appId?: string
   entryId?: string
   decision?: boolean
+}
+
+/** The homepage conversation a team page was opened from: the one selected in its space then. */
+export interface ConversationReturn {
+  /** The team page it applies to; any other team's page goes back to the list. */
+  teamId: string
+  spaceId: string
+  teamChat: TeamChatTarget | null
+  appChat: { appId: string; conversationId: string } | null
+  conversationId: string | null
 }
 
 interface PeopleViewState {
@@ -27,6 +38,7 @@ interface PeopleViewState {
   returnInbox: boolean
   returnPerson: string | null
   returnTeam: TeamNavigationTarget | null
+  returnConversation: ConversationReturn | null
   setFilters: (patch: Partial<Pick<PeopleViewState, 'query' | 'team' | 'space' | 'tag' | 'page'>>) => void
   saveScroll: (key: string, top: number) => void
   saveTranscriptPosition: (key: string, position: TranscriptPosition) => void
@@ -36,7 +48,7 @@ interface PeopleViewState {
 
 export const usePeopleViewStore = create<PeopleViewState>()(persist((set) => ({
   query: '', team: '', space: '', tag: '', page: 1,
-  directoryScroll: 0, scrolls: {}, transcriptPositions: {}, drafts: {}, focusEntry: null, teamTarget: null, returnInbox: false, returnPerson: null, returnTeam: null,
+  directoryScroll: 0, scrolls: {}, transcriptPositions: {}, drafts: {}, focusEntry: null, teamTarget: null, returnInbox: false, returnPerson: null, returnTeam: null, returnConversation: null,
   setFilters: patch => set({ ...patch, page: patch.page ?? 1 }),
   saveScroll: (key, top) => set(state => ({ scrolls: { ...state.scrolls, [key]: top } })),
   saveTranscriptPosition: (key, position) => set(state => ({ transcriptPositions: { ...state.transcriptPositions, [key]: position } })),

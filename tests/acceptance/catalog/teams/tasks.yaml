@@ -640,30 +640,3 @@ scenarios:
     notes:
       en: The header counts outputs from this month's tasks; the panel total covers all time, so the two can differ.
       zh: 页头统计本月任务的产出，面板总数涵盖全部时间，两者可能不同。
-
-  - id: teams.tasks.needs-you
-    title:
-      en: Handle several things waiting on me from the team page
-      zh: 在团队页处理多件等我处理的事
-    verifies: [attention, layout]
-    platforms: [darwin, win32, linux]
-    profiles: [regression]
-    evidence: ui
-    mode: none
-    automation: automated
-    preconditions:
-      - en: An isolated renderer fixture has a team where three tasks stopped because the model of two of my own members is no longer available, a fourth task failed for another reason, and one member is waiting on my decision.
-        zh: 隔离界面数据中，团队有三个任务因我自己两位成员的模型失效而停下，第四个任务因其他原因失败，另有一位成员在等我决定。
-    steps:
-      - en: Open the team page, expand the tasks involved in the merged card, then choose Change model; repeat at a narrow width and in both themes.
-        zh: 打开团队页，展开合并卡中涉及的任务，再点击“去更换模型”；在窄屏和两种主题下重复。
-    expected:
-      - en: '"Needs you" counts every task and decision. Tasks stopped on the same model setting become one card that names the cause and the affected members, with Change model and "N tasks involved", which expands in place to one row per task that opens it. Everything else follows as one line each with Reply or View; Reply opens that decision in full in front.'
-        zh: '“需要你处理”的数量按任务与决定逐条计算。因同一模型设置停下的任务合并为一张卡，写明原因与受影响的成员，提供“去更换模型”和“涉及的 N 个任务”，后者原地展开为每个任务一行，点击打开该任务。其余各占一行，提供“回复”或“查看”；“回复”会把该决定以完整卡片置于最前。'
-      - en: With one affected member Change model opens that member's model settings; with several it opens the Members page, which lists them first, tinted, with their stop reason and their own Change model. No text claims the tasks resume by themselves.
-        zh: 只有一位受影响成员时，“去更换模型”打开该成员的模型设置；多位时打开成员页，这些成员排在最前并标红，显示停下原因及各自的“去更换模型”。界面不声称任务会自动继续。
-      - en: Only my own members on this machine are grouped; a teammate's member, an undelivered message or an unrelated failure stays its own line. Nothing overflows at a narrow width in either theme.
-        zh: 只有我自己在本机的成员会被合并；队友的成员、未送达的消息或无关失败各自单独一行。窄屏两种主题下均不溢出。
-    notes:
-      en: Application handlers are replaced. This verifies grouping, ordering and navigation in the renderer, not that changing a model restarts a task. The bound test covers the count, the merged card and its expansion, Reply, and Change model with several affected members; the single-member path and a teammate's member or an undelivered message staying its own line are not yet asserted.
-      zh: 应用处理器被替换；验证界面中的合并、排序与跳转，不证明更换模型后任务会重新开始。已绑定的测试覆盖计数、合并卡片及其展开、“回复”，以及多位受影响成员时的“去更换模型”；单个成员的路径，以及队友成员或未送达消息单独成行，尚未断言。

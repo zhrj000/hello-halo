@@ -484,7 +484,7 @@ export type TaskSource = 'conversation' | 'automation' | 'team';
 
 /** A single entry in the task panel, aggregated from conversations, automation apps and teams. */
 export interface TaskItem {
-  /** Globally unique: `conv:<conversationId>`, `app:<appId>` or `team:<teamId>` */
+  /** Globally unique: `conv:<conversationId>`, `app:<appId>` or `team:<teamId>:<epochId>` */
   key: string;
   source: TaskSource;
   status: TaskItemStatus;
@@ -516,8 +516,10 @@ export interface TaskItem {
   escalationId?: string;
   runId?: string;
 
-  /** Present when source === 'team' — a team with a decision waiting on the user. */
+  /** Present when source === 'team' — a team task that needs the user. */
   teamId?: string;
+  /** Present when source === 'team': the task (`teamTaskKey(teamId, epochId)`). */
+  epochId?: string;
 }
 
 // Full conversation with messages

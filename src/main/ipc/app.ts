@@ -29,6 +29,7 @@
  *   app:chat-send          Send a chat message to an App's AI agent
  *   app:chat-stop          Stop an active app chat generation
  *   app:chat-inject        Add a message to the turn an app chat is running
+ *   app:chat-withdraw      Take back a message waiting behind a turn that serves someone else
  *   app:chat-status        Get app chat status (generating + conversationId)
  *   app:chat-messages      Load persisted chat messages for an app
  *   app:chat-transcript    Load one page of persisted chat messages (newest first, thoughts omitted)
@@ -68,6 +69,9 @@ import {
   stopAppChat,
   stopAppChatConversation,
   injectIntoAppChatWhenLive,
+  appChatTurnServesOther,
+  appChatAdditionResult,
+  withdrawWaitingAppChatMessage,
   isAppChatGenerating,
   isAppChatConversationGenerating,
   loadAppChatMessages,
@@ -759,10 +763,28 @@ export function registerAppHandlers(): void {
         const outcome = await injectIntoAppChatWhenLive(target.conversationId, message, { source: 'injection' }, references.references, input.images)
         if (outcome === 'refused') return { success: false, error: 'The running turn could not accept this addition. Your message has not been sent.' }
         console.log(`[AppIPC] app:chat-inject: appId=${input.appId} conversationId=${input.conversationId} outcome=${outcome}`)
-        return { success: true, data: { delivered: outcome === 'delivered', ...(outcome === 'stopped' ? { stopped: true } : {}) } }
+        return { success: true, data: appChatAdditionResult(outcome, target.conversationId) }
       } catch (error: unknown) {
         const err = error as Error
         console.error('[AppIPC] app:chat-inject error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    // ── app:chat-withdraw ──────────────────────────────────────────────────
+    // The person takes back a message still waiting behind a turn that serves
+    // someone else (`afterTurn` from app:chat-inject). `withdrawn: false` once
+    // it is no longer waiting: its own turn already began.
+    appChatWithdraw: async (input: { appId: string; conversationId: string; message: string }) => {
+      try {
+        const message = typeof input?.message === 'string' ? input.message.trim() : ''
+        if (!message || !input?.conversationId) return { success: false, error: 'Missing conversationId or message' }
+        const target = resolveUserInjectTarget(input.appId, input.conversationId)
+        if (!target.ok) return { success: false, error: target.error }
+        return { success: true, data: { withdrawn: withdrawWaitingAppChatMessage(target.conversationId, message) } }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[AppIPC] app:chat-withdraw error:', err.message)
         return { success: false, error: err.message }
       }
     },
@@ -775,11 +797,15 @@ export function registerAppHandlers(): void {
         const isGenerating = conversationId
           ? isAppChatConversationGenerating(conversationId)
           : isAppChatGenerating(appId)
+        // Whose request the running turn serves, when not the owner's: the
+        // composer says the owner's words will wait for it.
+        const servesOther = conversationId && isGenerating ? appChatTurnServesOther(conversationId) : undefined
         return {
           success: true,
           data: {
             isGenerating,
             conversationId: conversationId ?? getAppChatConversationId(appId),
+            ...(servesOther ? { servesOther } : {}),
           }
         }
       } catch (error: unknown) {

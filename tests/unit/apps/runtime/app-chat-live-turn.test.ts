@@ -53,6 +53,8 @@ import {
   injectIntoAppChat,
   injectIntoAppChatBatch,
   injectIntoAppChatWhenLive,
+  appChatAdditionResult,
+  appChatTurnServesOther,
   isAppChatConversationGenerating,
   isAppChatTurnDispatched,
   onAppChatConversationChange,
@@ -470,16 +472,35 @@ describe('live app-chat input preparation', () => {
     expect(writeTrigger).toHaveBeenCalledWith('', images, undefined, undefined, undefined)
   })
 
-  it('does not merge owner images into a guest turn', async () => {
+  it('does not merge owner images into a guest turn: they wait for it as the owner\'s next message', async () => {
     const send = vi.fn()
     liveTurn(CONVO, send)
     livePreparation.identity = 'guest:restricted'
     const prepare = vi.fn(() => ({ text: '', images }))
     livePreparation.handler = prepare
-    expect(await injectIntoAppChatWhenLive(CONVO, '', undefined, undefined, images)).toBe('refused')
+    expect(await injectIntoAppChatWhenLive(CONVO, '', undefined, undefined, images)).toBe('after_turn')
+    expect(appChatAdditionResult('after_turn', CONVO)).toEqual({ delivered: false, afterTurn: true, servesOther: 'guest' })
     expect(prepare).not.toHaveBeenCalled()
     expect(send).not.toHaveBeenCalled()
     expect(writeTrigger).not.toHaveBeenCalled()
+  })
+
+  it('does not merge the owner\'s words into a colleague\'s turn, and says whose it is', async () => {
+    const send = vi.fn()
+    liveTurn(CONVO, send)
+    livePreparation.identity = 'colleague'
+    livePreparation.handler = (text: string) => ({ text })
+    expect(appChatTurnServesOther(CONVO)).toBe('colleague')
+    expect(await injectIntoAppChatWhenLive(CONVO, 'use ai-terminal if Bash fails')).toBe('after_turn')
+    expect(appChatAdditionResult('after_turn', CONVO)).toEqual({ delivered: false, afterTurn: true, servesOther: 'colleague' })
+    expect(send).not.toHaveBeenCalled()
+    expect(writeTrigger).not.toHaveBeenCalled()
+  })
+
+  it('serves no one else while the owner\'s own turn runs', () => {
+    liveTurn(CONVO, vi.fn())
+    livePreparation.identity = 'owner'
+    expect(appChatTurnServesOther(CONVO)).toBeUndefined()
   })
 
   it('leaves images with the caller when live preparation cannot accept them', async () => {

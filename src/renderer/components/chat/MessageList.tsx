@@ -29,7 +29,7 @@ import { useBrowserToolCalls, type BrowserToolCall } from './useBrowserToolCalls
 import { useTerminalToolCalls, type TerminalToolCall } from './useTerminalToolCalls'
 import { CompactNotice } from './CompactNotice'
 import { InterruptedBubble } from './InterruptedBubble'
-import { useStickToBottom, useHistoryWindow, transcriptRowClass, estimatedRowHeight, revealRowInView, nextTranscriptRows, openerOwner, liveArrivals, type ScrollMotion, type TranscriptRows } from './transcript'
+import { useStickToBottom, useHistoryWindow, transcriptRowClass, estimatedRowHeight, revealRowInView, nextTranscriptRows, openerOwner, liveArrivals, startsNewDay, startsNewSegment, formatSegmentLabel, type ScrollMotion, type TranscriptRows } from './transcript'
 import type { Message, Thought, CompactInfo, AgentErrorType, PendingQuestion, WorkDirIssue } from '../../types'
 import { WorkingDirUnavailableNotice } from './WorkingDirUnavailableNotice'
 import { TurnErrorBubble } from './TurnErrorBubble'
@@ -344,6 +344,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   const rows = useMemo(() => {
     const out: ReactNode[] = []
     const latestReply = displayMessages.findLastIndex(message => message.role === 'assistant')
+    const now = new Date()
     for (let index = start; index < displayMessages.length; index++) {
       const message = displayMessages[index]
       const key = rowKeys[index]
@@ -368,6 +369,11 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
       const rowOpeners = teamRunFrom(displayMessages, index) ?? openers.get(message.id)
       out.push(
         <div key={key} data-transcript-index={index} className={transcriptRowClass(message)}>
+          {startsNewSegment(displayMessages, index) && (
+            <div className={`${contentWidthClass} pb-4 text-center text-[11px] tabular-nums text-faint-foreground`}>
+              {formatSegmentLabel(message.timestamp, startsNewDay(displayMessages, index), t, now)}
+            </div>
+          )}
           <MessageRow
             message={message}
             previousCost={previousCosts[index]}
@@ -392,7 +398,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     }
     if (liveStart >= displayMessages.length) out.push(<div key="history-start" ref={sentinelRef} aria-hidden="true" />)
     return out
-  }, [displayMessages, start, liveStart, liveEnd, placeholderHeight, sentinelRef, endSentinelRef, previousCosts, defaultThoughtsExpanded, showOperations, hasThoughtsLoader, handleLoadThoughts, latestReplyId, streamedThoughts, hideBrowserLiveView, hideTerminalOpen, allowViewChanges, rowKeys, injections, arrivals, openers, openerReveal, contentWidthClass, senderName, interruptedNoticeShown])
+  }, [displayMessages, start, liveStart, liveEnd, placeholderHeight, sentinelRef, endSentinelRef, previousCosts, defaultThoughtsExpanded, showOperations, hasThoughtsLoader, handleLoadThoughts, latestReplyId, streamedThoughts, hideBrowserLiveView, hideTerminalOpen, allowViewChanges, rowKeys, injections, arrivals, openers, openerReveal, contentWidthClass, senderName, interruptedNoticeShown, t])
 
   // Keep the footer mounted for an active question independently of isGenerating:
   // a recovered question can be paused on the answer with isGenerating false, and

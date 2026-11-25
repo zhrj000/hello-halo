@@ -34,6 +34,7 @@ const teamExecution = vi.hoisted(() => ({ ready: true }))
 
 const sendAppChatMessage = vi.fn<[Record<string, unknown>], Promise<void>>()
 const injectIntoAppChatWhenLive = vi.fn()
+const withdrawWaiting = vi.fn()
 const stopAppChat = vi.fn<[string], Promise<void>>()
 const stopAppChatConversation = vi.fn<[string], Promise<void>>()
 const clearAppChat = vi.fn<[string, string, string | undefined], Promise<void>>()
@@ -82,6 +83,10 @@ vi.mock('../../../../src/main/http/routes/_shared', () => {
     restartAppChat: vi.fn(),
     sendAppChatMessage: (request: Record<string, unknown>) => sendAppChatMessage(request),
     injectIntoAppChatWhenLive: (...args: unknown[]) => injectIntoAppChatWhenLive(...args),
+    appChatAdditionResult: (outcome: string) => outcome === 'stopped' ? { delivered: false, stopped: true }
+      : outcome === 'after_turn' ? { delivered: false, afterTurn: true, servesOther: 'colleague' } : { delivered: outcome === 'delivered' },
+    appChatTurnServesOther: () => undefined,
+    withdrawWaitingAppChatMessage: (...args: unknown[]) => withdrawWaiting(...args),
     stopAppChat: (appId: string) => stopAppChat(appId),
     stopAppChatConversation: (conversationId: string) => stopAppChatConversation(conversationId),
     writeMcpCommandBlockedResponse: vi.fn(),

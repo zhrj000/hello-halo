@@ -8,6 +8,7 @@ import express from 'express'
 import type { AddressInfo } from 'net'
 
 const injectIntoAppChat = vi.fn()
+const withdrawWaiting = vi.fn()
 const sendAppChatMessage = vi.fn()
 const team = vi.hoisted(() => ({ ready: false, remote: false }))
 
@@ -20,6 +21,10 @@ vi.mock('../../../../src/main/http/routes/_shared', () => ({
   getAppRuntime: () => ({}),
   getAppChatConversationId: (appId: string) => `app-chat:${appId}`,
   injectIntoAppChatWhenLive: async (...args: unknown[]) => injectIntoAppChat(...args),
+  appChatAdditionResult: (outcome: string) => outcome === 'stopped' ? { delivered: false, stopped: true }
+    : outcome === 'after_turn' ? { delivered: false, afterTurn: true, servesOther: 'colleague' } : { delivered: outcome === 'delivered' },
+  appChatTurnServesOther: () => undefined,
+  withdrawWaitingAppChatMessage: (...args: unknown[]) => withdrawWaiting(...args),
   sendAppChatMessage: (...args: unknown[]) => sendAppChatMessage(...args),
 }))
 vi.mock('../../../../src/main/apps/team', () => ({ getTeamService: () => team.ready ? { participants: {} } : null, getTeamStore: () => team.ready ? {
@@ -108,6 +113,25 @@ describe('POST chat/inject', () => {
       expect(res.body).toEqual({ success: false, error: expect.stringContaining('not been sent') })
       expect(res.body).not.toHaveProperty('data')
       expect(sendAppChatMessage).not.toHaveBeenCalled()
+    })
+  })
+
+  it('asks the caller to send it after a turn that serves a colleague, and lets it be taken back', async () => {
+    team.ready = true
+    injectIntoAppChat.mockReturnValue('after_turn')
+    withdrawWaiting.mockReturnValue(true)
+    await withServer(async post => {
+      const res = await post('/api/apps/app-1/chat/inject', { conversationId: 'app-chat:app-1:team:t1:e1', message: 'use ai-terminal' })
+      expect(res.body).toEqual({ success: true, data: { delivered: false, afterTurn: true, servesOther: 'colleague' } })
+      expect(sendAppChatMessage).not.toHaveBeenCalled()
+
+      const back = await post('/api/apps/app-1/chat/withdraw', { conversationId: 'app-chat:app-1:team:t1:e1', message: ' use ai-terminal ' })
+      expect(back.body).toEqual({ success: true, data: { withdrawn: true } })
+      expect(withdrawWaiting).toHaveBeenCalledWith('app-chat:app-1:team:t1:e1', 'use ai-terminal')
+
+      const foreign = await post('/api/apps/app-1/chat/withdraw', { conversationId: 'app-chat:app-2', message: 'x' })
+      expect(foreign.status).toBe(400)
+      expect(withdrawWaiting).toHaveBeenCalledTimes(1)
     })
   })
 

@@ -44,6 +44,8 @@ export interface TeamChatTarget {
   appId?: string
   entryId?: string
   decision?: boolean
+  /** Bumped on every request to reach `entryId`, so asking again for the one already shown still scrolls to it and marks it. */
+  revealSeq?: number
   label?: string
   teamName?: string
 }

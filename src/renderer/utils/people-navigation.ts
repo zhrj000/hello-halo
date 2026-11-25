@@ -1,15 +1,64 @@
 import { api } from '../api'
 import { useAppsStore } from '../stores/apps.store'
 import { useAppsPageStore } from '../stores/apps-page.store'
-import { usePeopleViewStore, type TeamNavigationTarget } from '../stores/people-view.store'
+import { useChatStore } from '../stores/chat.store'
+import { usePeopleViewStore, type ConversationReturn, type TeamNavigationTarget } from '../stores/people-view.store'
 import { useTeamStore } from '../stores/team.store'
 import { useAppStore } from '../stores/app.store'
+import { navigateToAppChat, navigateToConversation } from './conversation-navigation'
+import { openTeamConversation, openTeamWork } from './team-conversation-navigation'
 
+/**
+ * Opens a team's page. Opened from the homepage, the conversation on screen is
+ * remembered so the page's back arrow returns to it rather than to the team list.
+ */
 export function openPersonTeam(target: TeamNavigationTarget, returnPerson: string | null = null) {
-  usePeopleViewStore.setState({ teamTarget: target, returnPerson, returnInbox: useAppsPageStore.getState().currentTab === 'inbox', returnTeam: null })
+  usePeopleViewStore.setState({
+    teamTarget: target, returnPerson, returnInbox: useAppsPageStore.getState().currentTab === 'inbox', returnTeam: null,
+    returnConversation: homepageConversation(target.teamId),
+  })
   useTeamStore.getState().selectTeam(target.teamId)
   useAppsPageStore.getState().setCurrentTab('team')
   useAppStore.getState().navigate('apps')
+}
+
+/** The conversation selected on the homepage now; null anywhere else. */
+function homepageConversation(teamId: string): ConversationReturn | null {
+  if (useAppStore.getState().view !== 'space') return null
+  const chat = useChatStore.getState()
+  const spaceId = chat.currentSpaceId
+  if (!spaceId) return null
+  const state = chat.spaceStates.get(spaceId)
+  return {
+    teamId, spaceId,
+    teamChat: state?.selectedTeamChat ?? null,
+    appChat: state?.selectedAppChat ?? null,
+    conversationId: state?.currentConversationId ?? null,
+  }
+}
+
+/**
+ * Back from a team page to the homepage conversation it was opened from. When
+ * that conversation is still the one selected there, the homepage is simply shown
+ * again, as it was left; otherwise it is selected anew. A waiting decision it was
+ * opened at is not reopened: that was a one-off arrival, not where the person was.
+ */
+export function returnToConversation(origin: ConversationReturn) {
+  usePeopleViewStore.setState({ returnConversation: null })
+  useTeamStore.getState().selectTeam(null)
+  const chat = useChatStore.getState()
+  const state = chat.currentSpaceId === origin.spaceId ? chat.spaceStates.get(origin.spaceId) : undefined
+  const team = state?.selectedTeamChat ?? null
+  const app = state?.selectedAppChat ?? null
+  const unchanged = !!state
+    && (team?.teamId ?? null) === (origin.teamChat?.teamId ?? null) && (team?.epochId ?? null) === (origin.teamChat?.epochId ?? null)
+    && (app?.conversationId ?? null) === (origin.appChat?.conversationId ?? null)
+    && (state.currentConversationId ?? null) === origin.conversationId
+  if (unchanged) return useAppStore.getState().navigate('space')
+  if (origin.teamChat) openTeamConversation(origin.spaceId, { ...origin.teamChat, entryId: undefined, decision: undefined })
+  else if (origin.appChat) navigateToAppChat(origin.spaceId, origin.appChat.appId, origin.appChat.conversationId)
+  else if (origin.conversationId) navigateToConversation(origin.spaceId, origin.conversationId)
+  else useAppStore.getState().navigate('space')
 }
 
 export interface WorkNavigationTarget {
@@ -33,6 +82,12 @@ export async function openWorkNotification(target: WorkNavigationTarget) {
       } else console.warn('[PeopleNavigation] Notification record unavailable', { appId: target.appId, entryId: target.entryId, error: result.error })
     } catch (error) { console.warn('[PeopleNavigation] Notification record lookup failed', { appId: target.appId, entryId: target.entryId, error }) }
   }
+  // Team work is handled in its homepage conversation; the team page is only
+  // where it lands when the task cannot be shown there.
+  if (target.teamId && target.epochId && await openTeamWork({
+    teamId: target.teamId, epochId: target.epochId, appId: target.appId,
+    ...(decision && target.entryId ? { decisionEntryId: target.entryId } : {}),
+  })) return
   useAppsPageStore.getState().setInitialAppId(null)
   if (target.teamId) {
     const current = useAppsPageStore.getState()

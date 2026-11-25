@@ -34,6 +34,22 @@ describe('local team session supplements', () => {
     expect(fallback).not.toHaveBeenCalled()
   })
 
+  it('sends the owner\'s words to wait behind a turn that serves a colleague', async () => {
+    inject.mockResolvedValue({ success: true, data: { delivered: false, afterTurn: true, servesOther: 'colleague' } })
+    const fallback = vi.fn(async () => true)
+    const behind = vi.fn(async () => true)
+    expect(await injectTeamSessionMessage(input, fallback, behind)).toBe(true)
+    expect(behind).toHaveBeenCalledWith('colleague')
+    expect(fallback).not.toHaveBeenCalled()
+  })
+
+  it('still sends it after the turn when no waiting view is offered', async () => {
+    inject.mockResolvedValue({ success: true, data: { delivered: false, afterTurn: true, servesOther: 'guest' } })
+    const fallback = vi.fn(async () => true)
+    expect(await injectTeamSessionMessage(input, fallback)).toBe(true)
+    expect(fallback).toHaveBeenCalledTimes(1)
+  })
+
   it('keeps an authority refusal visible instead of falling back to a new privileged turn', async () => {
     inject.mockResolvedValue({ success: false, error: 'The target is not locally owned' })
     const fallback = vi.fn(async () => true)

@@ -1079,7 +1079,9 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
   }
 
   function listTeamItems(spaceId?: string): TeamListItem[] {
-    return store.listStandingTeams(spaceId).map((team) => {
+    // A joined team shows in the spaces holding the digital humans brought into it.
+    const localAppIds = spaceId ? appManager.listApps({ spaceId }).map(app => app.id) : []
+    return store.listStandingTeams(spaceId, localAppIds).map((team) => {
       const members = store.listMembersByTeam(team.id).filter(m => !parseSpaceCoordinatorAppId(m.appId))
       // Waiting decisions survive a run seal (P0-5), so a team can be idle yet
       // still have pending escalations — count them independently of run status.

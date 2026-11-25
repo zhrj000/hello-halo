@@ -34,6 +34,7 @@ vi.mock('react', async original => ({
   useEffect: () => {},
 }))
 vi.mock('react-virtuoso', () => ({ Virtuoso: function Virtuoso() { return null } }))
+vi.mock('../../../src/renderer/stores/team-chat-seen.store', async original => ({ ...await original<typeof import('../../../src/renderer/stores/team-chat-seen.store')>(), useTeamChatSeenStore: (select: any) => select({ seen: {}, since: 0, markSeen: () => {} }) }))
 vi.mock('../../../src/renderer/i18n', () => ({
   useTranslation: () => ({ t: (text: string, values: Record<string, unknown> = {}) => text.replace(/\{\{(\w+)\}\}/g, (_, key) => String(values[key])) }),
   getCurrentLanguage: () => 'en',
@@ -50,7 +51,7 @@ vi.mock('../../../src/renderer/stores/space.store', () => {
 vi.mock('../../../src/renderer/stores/app-chat-pins.store', () => ({ useAppChatPinsStore: (select: any) => select({ toggleAppChatPin: vi.fn() }) }))
 vi.mock('../../../src/renderer/hooks/useAppChatConversationRows', () => ({ useAppChatConversationRows: () => env.rows }))
 vi.mock('../../../src/renderer/hooks/useTeamConversationRows', () => ({
-  buildTeamRows: () => ({ rows: [], pinned: [] }),
+  buildTeamGroups: () => [],
   useTeamConversationRows: () => ({ tasks: [], teams: [], pins: [], hidden: {}, error: false, loading: false }),
 }))
 vi.mock('../../../src/renderer/components/chat/TeamConversationRow', () => ({ TeamConversationRow: () => null }))

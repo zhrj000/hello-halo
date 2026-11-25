@@ -3,14 +3,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   GitBranch, RefreshCw, Bot, UserCircle,
-  Trash2, Plus, Info, Crown, Star, LogOut, Users, Network,
+  Trash2, Plus, Info, Crown, Star, LogOut,
 } from 'lucide-react'
 import type { TeamDetail, TeamTrigger, TeamScheduleConfig, TeamTriggerInput } from '../../../shared/apps/team-types'
 import { isRemoteMember } from '../../../shared/apps/team-types'
 import { capabilityPolicyFromPreset } from '../../../shared/apps/capability-policy'
 import type { CapabilityPresetId } from '../../../shared/apps/capability-policy'
 import { useTeamStore } from '../../stores/team.store'
-import { useOfficeSkin, useTeamViewPrefsStore } from '../../stores/team-view-prefs.store'
 import { useAppsStore } from '../../stores/apps.store'
 import { teamMemberCandidates } from '../../utils/people-model'
 import { useTranslation } from '../../i18n'
@@ -94,8 +93,7 @@ export function SettingsTab({ detail, openMemberId, onOpenMemberChange, layout =
         </SettingsGroup>
         <SettingsGroup>
           <Disclosure title={t('Advanced')}>
-            <OfficeSkinSection teamId={detail.team.id} first />
-            <CollaborationSection team={detail.team} readOnly={readOnly} />
+            <CollaborationSection team={detail.team} readOnly={readOnly} first />
             {!readOnly && (
               <div className="border-t border-border pt-6">
                 <HttpTriggerCard kind="team" id={detail.team.id} />
@@ -125,8 +123,7 @@ export function SettingsTab({ detail, openMemberId, onOpenMemberChange, layout =
             routing, HTTP trigger, and disband — rarely touched, out of the way. */}
         <div className="border-t border-border pt-6">
           <Disclosure title={t('Advanced')}>
-            <OfficeSkinSection teamId={detail.team.id} />
-            <CollaborationSection team={detail.team} readOnly={readOnly} />
+            <CollaborationSection team={detail.team} readOnly={readOnly} first />
             {!readOnly && (
               <div className="border-t border-border pt-6">
                 <HttpTriggerCard kind="team" id={detail.team.id} />
@@ -264,12 +261,12 @@ function ScheduleSection({ teamId }: { teamId: string }) {
 
 // ── 3. Collaboration ──
 
-function CollaborationSection({ team, readOnly }: { team: TeamDetail['team']; readOnly?: boolean }) {
+function CollaborationSection({ team, readOnly, first }: { team: TeamDetail['team']; readOnly?: boolean; first?: boolean }) {
   const updateTeam = useTeamStore(s => s.updateTeam)
   const { t } = useTranslation()
 
   return (
-    <Section title={t('Team Collaboration')}>
+    <Section title={t('Team Collaboration')} first={first}>
       {/* Coordination style */}
       <div className="space-y-2">
         <span className="text-xs font-medium text-muted-foreground">{t('Coordination')}</span>
@@ -318,39 +315,6 @@ function CollaborationSection({ team, readOnly }: { team: TeamDetail['team']; re
             disabled={readOnly}
           />
         </div>
-      </div>
-    </Section>
-  )
-}
-
-// ── 3b. Office appearance (client-local view preference) ──
-
-function OfficeSkinSection({ teamId, first }: { teamId: string; first?: boolean }) {
-  const { t } = useTranslation()
-  const skin = useOfficeSkin(teamId)
-  const setOfficeSkin = useTeamViewPrefsStore(s => s.setOfficeSkin)
-
-  return (
-    <Section title={t('Appearance')} first={first}>
-      <p className="mb-2 text-xs text-muted-foreground/70">
-        {t('How this team looks on your screen. Only affects your view.')}
-      </p>
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-        <OptionCard
-          icon={<Users className="h-4 w-4" />}
-          label={t('Cartoon')}
-          description={t('Members appear as characters at their workstations, showing what each is doing.')}
-          selected={skin === 'cartoon'}
-          onClick={() => setOfficeSkin(teamId, 'cartoon')}
-          badge={t('Default')}
-        />
-        <OptionCard
-          icon={<Network className="h-4 w-4" />}
-          label={t('Plain topology')}
-          description={t('A compact status card per member, connected by the reporting lines.')}
-          selected={skin === 'default'}
-          onClick={() => setOfficeSkin(teamId, 'default')}
-        />
       </div>
     </Section>
   )

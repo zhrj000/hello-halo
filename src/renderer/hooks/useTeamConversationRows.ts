@@ -3,6 +3,7 @@ import { api } from '../api'
 import type { Team, TeamListItem, TeamNativeTaskPage, TeamRosterFace, TeamUpdatedEvent } from '../../shared/apps/team-types'
 import { teamTaskKey, useTeamChatPinsStore } from '../stores/team-chat-pins.store'
 import { useTeamChatHiddenStore, type HiddenTeamChat } from '../stores/team-chat-hidden.store'
+import type { TaskStatus } from '../types'
 
 export type NativeTeamTask = TeamNativeTaskPage['items'][number]
 type TeamSummary = Pick<Team, 'id' | 'name'> & Partial<Pick<TeamListItem, 'roster'>>
@@ -13,11 +14,15 @@ type TeamSummary = Pick<Team, 'id' | 'name'> & Partial<Pick<TeamListItem, 'roste
  */
 export interface TeamAvatarFaces { names: string[]; overflow: number }
 export type TeamListRow =
-  | { type: 'team-header'; key: string; teamId: string; name: string; collapsed: boolean; avatar: TeamAvatarFaces }
-  | { type: 'team-item'; key: string; task: NativeTeamTask; standalone: boolean; starred: boolean; avatar: TeamAvatarFaces }
+  /** `attention`: the most urgent state among its listed (unpinned, kept) tasks, shown while folded. */
+  | { type: 'team-header'; key: string; teamId: string; name: string; collapsed: boolean; avatar: TeamAvatarFaces; attention?: Exclude<TaskStatus, 'idle'> }
+  /** `status`: the task's state for this person (seen or not); derived from the task alone when absent. */
+  | { type: 'team-item'; key: string; task: NativeTeamTask; standalone: boolean; starred: boolean; avatar: TeamAvatarFaces; status?: TaskStatus }
   | { type: 'team-retry'; key: string }
-  /** Tasks of this team the person removed from the list, with the way back. */
+  /** Tasks of this team the person archived, with the way back. */
   | { type: 'team-hidden'; key: string; teamId: string; count: number }
+  /** An open team with nothing listed yet: the way to its first conversation. */
+  | { type: 'team-empty'; key: string; teamId: string; name: string }
 
 const EMPTY_PINS: string[] = []
 const EMPTY_HIDDEN: Record<string, HiddenTeamChat> = {}
@@ -35,27 +40,73 @@ export function teamAvatarFaces(roster: readonly TeamRosterFace[]): TeamAvatarFa
   return { names, overflow: faces.length > AVATAR_SLOTS ? faces.length - (AVATAR_SLOTS - 1) : 0 }
 }
 
+export type TeamGroupAttention = 'waiting' | 'generating'
+
+/** The state a set of tasks owes the person most: a question for them first, then work in progress. */
+export function teamGroupAttention(tasks: readonly NativeTeamTask[]): TeamGroupAttention | undefined {
+  if (tasks.some(task => task.waitingForMe)) return 'waiting'
+  if (tasks.some(task => task.active)) return 'generating'
+  return undefined
+}
+
+/**
+ * Teams with a question waiting on the person among their listed tasks (not
+ * pinned, not removed): these open on their own so the question is not folded away.
+ */
+export function teamsWaitingOnMe(tasks: readonly NativeTeamTask[], pins: readonly string[], hidden: Record<string, HiddenTeamChat> = EMPTY_HIDDEN): string[] {
+  const ids = new Set<string>()
+  for (const task of tasks) {
+    const key = teamTaskKey(task.teamId, task.epochId)
+    if (task.waitingForMe && !pins.includes(key) && !hidden[key]) ids.add(task.teamId)
+  }
+  return [...ids]
+}
+
+/** One team in the list: its kept tasks in the order they came, its pinned ones, and how many were archived. */
+export interface TeamGroup {
+  teamId: string
+  /** `team:<id>`, the group's key in the list and in its fold and "More" choices. */
+  key: string
+  name: string
+  avatar: TeamAvatarFaces
+  /** Kept (not archived), not pinned. */
+  tasks: NativeTeamTask[]
+  pinned: NativeTeamTask[]
+  hidden: number
+}
+
+/** Teams in their own order, then any a listed task names that the summaries do not have yet. */
+export function buildTeamGroups(tasks: NativeTeamTask[], teams: TeamSummary[], pins: readonly string[], hidden: Record<string, HiddenTeamChat> = EMPTY_HIDDEN): TeamGroup[] {
+  const groups = new Map<string, TeamGroup>(teams.map(team => [team.id, { teamId: team.id, key: `team:${team.id}`, name: team.name, avatar: teamAvatarFaces(team.roster ?? []), tasks: [], pinned: [], hidden: 0 }]))
+  for (const task of tasks) {
+    let group = groups.get(task.teamId)
+    if (!group) {
+      group = { teamId: task.teamId, key: `team:${task.teamId}`, name: task.teamName, avatar: EMPTY_FACES, tasks: [], pinned: [], hidden: 0 }
+      groups.set(task.teamId, group)
+    }
+    const key = teamTaskKey(task.teamId, task.epochId)
+    if (hidden[key]) group.hidden++
+    else if (pins.includes(key)) group.pinned.push(task)
+    else group.tasks.push(task)
+  }
+  return [...groups.values()]
+}
+
 export function buildTeamRows(tasks: NativeTeamTask[], teams: TeamSummary[], pins: string[], isOpen: (id: string) => boolean, hidden: Record<string, HiddenTeamChat> = EMPTY_HIDDEN) {
   const pinned: TeamListRow[] = []
   const rows: TeamListRow[] = []
-  const groups = new Map(teams.map(team => [team.id, { name: team.name, avatar: teamAvatarFaces(team.roster ?? []), tasks: [] as NativeTeamTask[], hidden: 0 }]))
-  for (const task of tasks) {
-    const group = groups.get(task.teamId) ?? { name: task.teamName, avatar: EMPTY_FACES, tasks: [], hidden: 0 }
-    if (hidden[teamTaskKey(task.teamId, task.epochId)]) group.hidden++
-    else group.tasks.push(task)
-    groups.set(task.teamId, group)
-  }
-  for (const [teamId, group] of groups) {
+  for (const group of buildTeamGroups(tasks, teams, pins, hidden)) {
+    const { teamId } = group
     const collapsed = !isOpen(teamId)
-    rows.push({ type: 'team-header', key: `team:${teamId}`, teamId, name: group.name, collapsed, avatar: group.avatar })
-    for (const task of group.tasks) {
-      const key = teamTaskKey(teamId, task.epochId)
-      const starred = pins.includes(key)
-      const row: TeamListRow = { type: 'team-item', key, task, standalone: starred, starred, avatar: group.avatar }
-      if (starred) pinned.push(row)
-      else if (!collapsed) rows.push(row)
+    const attention = teamGroupAttention(group.tasks)
+    rows.push({ type: 'team-header', key: group.key, teamId, name: group.name, collapsed, avatar: group.avatar, ...(attention ? { attention } : {}) })
+    for (const task of group.pinned) {
+      pinned.push({ type: 'team-item', key: teamTaskKey(teamId, task.epochId), task, standalone: true, starred: true, avatar: group.avatar })
     }
-    if (!collapsed && group.hidden > 0) rows.push({ type: 'team-hidden', key: `team-hidden:${teamId}`, teamId, count: group.hidden })
+    if (!collapsed) {
+      for (const task of group.tasks) rows.push({ type: 'team-item', key: teamTaskKey(teamId, task.epochId), task, standalone: false, starred: false, avatar: group.avatar })
+      if (group.hidden > 0) rows.push({ type: 'team-hidden', key: `team-hidden:${teamId}`, teamId, count: group.hidden })
+    }
   }
   return { rows, pinned }
 }
@@ -152,15 +203,25 @@ export function useTeamConversationRows(spaceId: string | null | undefined, enab
     void load()
     const off = api.onTeamUpdated(data => {
       const event = data as TeamUpdatedEvent
-      if (event.team && event.team.owningSpaceId !== spaceId && !teams.some(team => team.id === event.teamId) && !tasks.some(task => task.teamId === event.teamId)) return
+      if (event.team && event.team.owningSpaceId !== spaceId && !teams.some(team => team.id === event.teamId) && !tasks.some(task => task.teamId === event.teamId)) {
+        // A joined team belongs to whichever spaces hold its local members, which
+        // only the summaries can tell: read them again rather than adding it here.
+        if (event.team.hostNodeId != null && !event.removed && summaryTimer === undefined) {
+          summaryTimer = setTimeout(() => { summaryTimer = undefined; void loadTeams() }, 250)
+        }
+        return
+      }
       if (event.removed) {
         teams = teams.filter(team => team.id !== event.teamId)
         tasks = tasks.filter(task => task.teamId !== event.teamId)
         pinnedTasks = pinnedTasks.filter(task => task.teamId !== event.teamId)
         publish(inFlight)
       } else if (event.team && !event.team.ephemeral) {
-        const existing = teams.find(team => team.id === event.teamId)
-        teams = [...teams.filter(team => team.id !== event.teamId), { ...existing, ...event.team }]
+        // In place: every work pulse carries the team, and moving it to the end
+        // each time made the groups trade places under the pointer.
+        const index = teams.findIndex(team => team.id === event.teamId)
+        const merged = { ...teams[index], ...event.team }
+        teams = index < 0 ? [...teams, merged] : teams.map((team, i) => (i === index ? merged : team))
         publish(inFlight)
       }
       if (!event.removed && (!event.changed || event.changed.includes('members')) && summaryTimer === undefined) {

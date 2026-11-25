@@ -374,6 +374,10 @@ export const MODULE: RouteModuleMeta = {
     'POST /api/apps/:appId/chat/inject': {
       expose: 'internal',
     },
+    // The chat UI taking back the owner's message waiting behind a colleague's turn.
+    'POST /api/apps/:appId/chat/withdraw': {
+      expose: 'internal',
+    },
     'GET /api/apps/:appId/chat/status': {
       expose: 'ai',
       group: 'digital-human',

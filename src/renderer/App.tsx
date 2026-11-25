@@ -52,6 +52,7 @@ import type { IngestProgressEvent } from '../shared/types/tlon'
 import type { ToastPayload } from '../shared/types/notification'
 import type { ApiRetryState } from '../shared/types/api-retry'
 import { openWorkNotification, type WorkNavigationTarget } from './utils/people-navigation'
+import { isViewingTeamTask } from './utils/team-conversation-navigation'
 import { openSearchResultConversation } from './utils/conversation-navigation'
 import { useTeamStore } from './stores/team.store'
 import { canvasLifecycle } from './services/canvas-lifecycle'
@@ -923,6 +924,8 @@ export default function App() {
   useEffect(() => {
     const unsub = api.onNotificationToast((data) => {
       const { id, title, body, bodyFormat, variant, duration, appId, entryId, teamId, epochId, runId, action } = data as ToastPayload
+      // The person is already looking at this task; the message is right in front of them.
+      if (teamId && epochId && isViewingTeamTask(teamId, epochId)) return
 
       // A declared link action wins over app deep-navigation: the sender asked
       // for a specific destination, which appId can only approximate. Routing

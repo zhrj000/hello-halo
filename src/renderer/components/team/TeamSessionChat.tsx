@@ -17,6 +17,7 @@ import { AutomationAvatar } from '../apps/AutomationAvatar'
 import { ChangesScopeContext, type ChangesScope } from '../chat/changes-scope'
 import { api } from '../../api'
 import { injectTeamSessionMessage } from './session-input'
+import { useWaitingAfterTurn, WaitingAfterTurnPanel, type TurnServesOther } from './WaitingAfterTurn'
 import { mergeArrivingMessages, withoutLiveInputs, withStoppedInputs } from '../../utils/live-inputs'
 import { usePeopleViewStore } from '../../stores/people-view.store'
 import { useChatStore } from '../../stores/chat.store'
@@ -475,19 +476,40 @@ export function TeamSessionChat({
     }
   }, [appId, spaceId, teamId, conversationId, epochId, ensureEpochId, isRemote, ownerName, resetSession, scrollToBottom, markSendFailed, t])
 
+  // The owner's words behind a turn serving someone else: sent now, waiting in
+  // the runtime's mailbox for that turn to end, shown below it until their own
+  // turn records them.
+  const waitingAfter = useWaitingAfterTurn({ appId, conversationId, messages, isGenerating, enabled: !isRemote && !readonly && !!epochId })
+  const sendBehindTurn = useCallback(async (content: string, images: ImageAttachment[] | undefined, references: ContentReference[] | undefined, servesOther: TurnServesOther | undefined) => {
+    if (!epochId) return false
+    const item = waitingAfter.add(content, servesOther)
+    const teamContext = { teamId, epochId, correlationId: `user-${Date.now()}`, fromAppId: null, wait: false }
+    try {
+      const res = await api.appChatSend({ appId, spaceId, message: content, images, conversationId, teamContext, ...(references?.length ? { references } : {}) })
+      if (res.success) return true
+      waitingAfter.remove(item.key)
+      useChatStore.getState().setSessionError(conversationId, String(res.error || t('Failed to send message')))
+    } catch (err) {
+      waitingAfter.remove(item.key)
+      useChatStore.getState().setSessionError(conversationId, String((err as Error).message || t('Failed to send message')))
+    }
+    return false
+  }, [appId, spaceId, teamId, epochId, conversationId, waitingAfter.add, waitingAfter.remove, t])
+
   const handleInject = useCallback(async (content: string, references?: ContentReference[], images?: ImageAttachment[]) => {
     if (isRemote || readonly || !epochId) return false
     try {
       return await injectTeamSessionMessage(
         { appId, conversationId, message: content, ...(references?.length ? { references } : {}), ...(images?.length ? { images } : {}) },
-        () => handleSend(content, images, undefined, references?.length ? { references } : undefined)
+        () => handleSend(content, images, undefined, references?.length ? { references } : undefined),
+        servesOther => sendBehindTurn(content, images, references?.length ? references : undefined, servesOther)
       )
     } catch (error) {
       useChatStore.getState().setSessionError(conversationId,
         error instanceof Error ? error.message : t('Failed to add message'))
       return false
     }
-  }, [appId, conversationId, epochId, isRemote, readonly, handleSend, t])
+  }, [appId, conversationId, epochId, isRemote, readonly, handleSend, sendBehindTurn, t])
 
   const handleStop = useCallback(async () => {
     // Settle the UI first and unconditionally. The abort may be swallowed
@@ -622,6 +644,7 @@ export function TeamSessionChat({
               ? (pendingQuestion || hasLiveInputs) && <StreamingSection streamingContent="" isStreaming={false} thoughts={[]} isThinking={false} textBlockVersion={0} liveInputs={hasLiveInputs ? ownAdditions : undefined} showBrowserViewButton={false} pendingQuestion={pendingQuestion} onAnswerQuestion={handleAnswerQuestion} senderName={senderName} authorName={authorName} />
               : streamingSection)}</div>}
             {hasStreaming && renderAfterStreaming?.(thoughts)}
+            {waitingAfter.waiting.length > 0 && <div className="pb-4"><WaitingAfterTurnPanel waiting={waitingAfter.waiting} onWithdraw={waitingAfter.withdraw} /></div>}
 
             {showRelayedTranscript && !backgroundTurn && (
               <p className="pb-4 pt-1 text-center text-xs text-muted-foreground/60">
@@ -702,7 +725,11 @@ export function TeamSessionChat({
             onInject={isRemote ? undefined : handleInject}
             onStop={handleStop}
             isGenerating={isGenerating}
-            placeholder={placeholder ?? t('Type a message…')}
+            placeholder={isGenerating && waitingAfter.servesOther
+              ? waitingAfter.servesOther === 'guest'
+                ? t('It is working on a guest’s request — what you send now is handled after it')
+                : t('It is working on a colleague’s request — what you send now is handled after it')
+              : placeholder ?? t('Type a message…')}
             isCompact={!composerAdjacentSlot}
           />
         </div>

@@ -9,6 +9,7 @@ import { usePeopleViewStore } from '../../../stores/people-view.store'
 import { useTeamStore, useTeamView } from '../../../stores/team.store'
 import { useElementWidth } from '../../../hooks/useElementWidth'
 import { teamAvatarFaces } from '../../../hooks/useTeamConversationRows'
+import { returnToConversation } from '../../../utils/people-navigation'
 import { localTeamSpace, openTeamConversation } from '../../../utils/team-conversation-navigation'
 import { AutomationAvatar } from '../../apps/AutomationAvatar'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/Popover'
@@ -47,6 +48,7 @@ export function TeamDetailPage({ detail, onBack }: { detail: TeamDetail; onBack?
   const loading = useTeamView(view => view.isLoadingConversations)
   const error = useTeamView(view => view.conversationsError)
   const navigationTarget = usePeopleViewStore(state => state.teamTarget)
+  const returnConversation = usePeopleViewStore(state => state.returnConversation)
   const apps = useAppsStore(state => state.apps)
   const [rootRef, width] = useElementWidth<HTMLDivElement>()
   const [page, setPage] = useState<SubPage | null>(null)
@@ -92,9 +94,10 @@ export function TeamDetailPage({ detail, onBack }: { detail: TeamDetail; onBack?
     mainRef.current?.scrollTo({ top: 0 })
   }
   const openTask = (epochId: string, next?: Omit<TaskPanelReveal, 'seq'>) => {
-    // Opening a task starts at its overview with the exchanges folded; the remembered drill only survives a re-dock.
+    // Opening a task starts at its overview with the exchanges folded; an open record only survives a re-dock.
     const memory = memoryFor(epochId)
-    if (!next?.memberAppId) delete memory.memberAppId
+    delete memory.memberAppId
+    delete memory.allMembers
     if (memory.open?.exchanges) memory.open = { ...memory.open, exchanges: false }
     // A task opened from the members page opens beside it; settings give way to the list.
     if (page === 'settings') showPage(null)
@@ -118,8 +121,8 @@ export function TeamDetailPage({ detail, onBack }: { detail: TeamDetail; onBack?
   useEffect(() => {
     if (!navigationTarget || navigationTarget.teamId !== team.id || loading) return
     if (navigationTarget.epochId) {
-      const { entryId, appId, decision } = navigationTarget
-      openTask(navigationTarget.epochId, entryId ? (decision ? { decisionId: entryId } : { activityId: entryId }) : appId && !decision ? { memberAppId: appId } : undefined)
+      const { entryId, decision } = navigationTarget
+      openTask(navigationTarget.epochId, entryId ? (decision ? { decisionId: entryId } : { activityId: entryId }) : undefined)
     } else if (navigationTarget.appId && detail.roster.some(member => member.appId === navigationTarget.appId)) {
       openMembers()
       openMember(navigationTarget.appId)
@@ -192,17 +195,21 @@ export function TeamDetailPage({ detail, onBack }: { detail: TeamDetail; onBack?
   </div>
   const renderPanel = (isDocked: boolean) => panelTask
     ? <TaskPanel key={panelTask.epochId} detail={detail} task={panelTask} taskSpaceId={taskSpaceId} docked={isDocked} memory={memoryFor(panelTask.epochId)} reveal={reveal}
-      onRevealHandled={seq => setReveal(current => current?.seq === seq ? undefined : current)} onClose={closePanel} onOpenTask={id => openTask(id)} />
+      onRevealHandled={seq => setReveal(current => current?.seq === seq ? undefined : current)} onClose={closePanel} />
     : panelMember
       ? <MemberPanel key={panelMember.appId} detail={detail} member={panelMember} tasks={tasks} taskSpaceId={taskSpaceId} docked={isDocked} owned={ownedIds.includes(panelMember.appId)}
-        onOpenTask={epochId => openTask(epochId, { memberAppId: panelMember.appId })} onOpenProfile={() => openProfile(panelMember.appId)} onClose={closePanel} />
+        onOpenTask={epochId => openTask(epochId)} onOpenProfile={() => openProfile(panelMember.appId)} onClose={closePanel} />
       : outputsOpen
         ? <OutputsPanel detail={detail} tasks={tasks} docked={isDocked} onOpenTask={id => openTask(id)} onClose={closePanel} />
         : null
   const panelLabel = panelMember ? t('Member details') : outputsOpen ? t('Outputs') : t('Task details')
   const backButton = 'shrink-0 rounded-full p-1.5 text-subtle-foreground transition-colors hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary'
 
-  const back = <button onClick={() => onBack ? onBack() : useTeamStore.getState().selectTeam(null)} aria-label={t('Back to teams')} title={t('Back to teams')} className={backButton}><ArrowLeft size={18} /></button>
+  // Back to where the page was opened from: the homepage conversation, or the team list.
+  const origin = !onBack && returnConversation?.teamId === team.id ? returnConversation : null
+  const backLabel = origin ? t('Back to conversation') : t('Back to teams')
+  const goBack = () => onBack ? onBack() : origin ? returnToConversation(origin) : useTeamStore.getState().selectTeam(null)
+  const back = <button onClick={goBack} aria-label={backLabel} title={backLabel} className={backButton}><ArrowLeft size={18} /></button>
   const pulse = (!loading || tasks.length > 0) && <TeamPulse detail={detail} tasks={tasks} outputsOpen={outputsOpen} onOpenOutputs={openOutputs} className="min-w-0 overflow-hidden whitespace-nowrap" />
   // Side by side, the team collapses to one bar over both columns so the list and the panel each scroll on their own.
   const split = panelOpen && docked && !page
@@ -277,8 +284,8 @@ export function TeamDetailPage({ detail, onBack }: { detail: TeamDetail; onBack?
             </>}
 
             <div className={split ? 'px-5 pb-16 pt-4 sm:px-6' : `mx-auto w-full ${PAGE_MAX} px-6 pb-16 pt-8 sm:px-10`}>
-              <TaskList wide={wide} detail={detail} tasks={tasks} taskSpaceId={taskSpaceId} filters={filters} onFilters={setFilters} selectedId={panelTask?.epochId ?? null} loading={loading} error={error}
-                onOpenTask={id => openTask(id)} onOpenSettings={() => showPage('settings')} onOpenMembers={openMembers} focused={panelOpen} />
+              <TaskList wide={wide} detail={detail} tasks={tasks} filters={filters} onFilters={setFilters} selectedId={panelTask?.epochId ?? null} loading={loading} error={error}
+                onOpenTask={id => openTask(id)} onOpenSettings={() => showPage('settings')} />
             </div>
           </>}
       </main>

@@ -5,11 +5,16 @@
  */
 
 import type { AppChatConversationRow } from '../../hooks/useAppChatConversationRows'
-import type { NativeTeamTask } from '../../hooks/useTeamConversationRows'
+import type { NativeTeamTask, TeamAvatarFaces } from '../../hooks/useTeamConversationRows'
 import type { TaskStatus } from '../../types'
 
-/** What the hover card shows for a row. `owner` is the digital human or team the row belongs to. */
-export interface RowHoverCard { label: string; owner?: string; note?: string; time?: string; status?: TaskStatus }
+/**
+ * What the hover card shows for a row: who it belongs to and when, its title,
+ * then who started it and its state. `owner` is the digital human or team the
+ * row belongs to; `ownerFaces` marks a team (drawn as its square grid) and
+ * carries its members' faces.
+ */
+export interface RowHoverCard { label: string; owner?: string; ownerFaces?: TeamAvatarFaces; note?: string; time?: string; status?: TaskStatus }
 
 /** Words for a row's status dot, for places where the colour alone is not enough. */
 export function taskStatusLabel(status: TaskStatus, t: (s: string) => string): string | undefined {
@@ -47,13 +52,14 @@ export function formatRowTime(timestamp: string | number, t: (s: string) => stri
 
 
 /** Provenance (`note`) appears only for tasks someone else started. */
-export function teamTaskHoverCard(task: NativeTeamTask, t: (s: string, opts?: Record<string, unknown>) => string): RowHoverCard {
+export function teamTaskHoverCard(task: NativeTeamTask, t: (s: string, opts?: Record<string, unknown>) => string, faces?: TeamAvatarFaces, status?: TaskStatus): RowHoverCard {
   return {
     label: task.label || t('New team conversation'),
     owner: task.teamName,
+    ...(faces ? { ownerFaces: faces } : {}),
     note: task.startedBy ? t('Started by {{name}}', { name: task.startedBy }) : undefined,
     time: formatRowTime(task.lastActivityAt, t),
-    status: task.waitingForMe ? 'waiting' : task.active ? 'generating' : undefined,
+    status: status && status !== 'idle' ? status : task.waitingForMe ? 'waiting' : task.active ? 'generating' : undefined,
   }
 }
 

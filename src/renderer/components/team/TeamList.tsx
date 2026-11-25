@@ -1,4 +1,5 @@
 import { Plus, LogIn, AlertTriangle, ArrowUpRight, Users } from 'lucide-react'
+import { usePeopleViewStore } from '../../stores/people-view.store'
 import { useTeamStore } from '../../stores/team.store'
 import { useTranslation } from '../../i18n'
 import { AutomationAvatar } from '../apps/AutomationAvatar'
@@ -10,7 +11,11 @@ export function TeamList({ onNewTeam, onJoinOffice }: { onNewTeam: () => void; o
   const teams = useTeamStore(s => s.teams).filter(team => !team.ephemeral)
   const loading = useTeamStore(s => s.isLoadingList)
   const error = useTeamStore(s => s.error)
-  const select = useTeamStore(s => s.selectTeam)
+  // Picked from the list, the team page goes back to the list.
+  const select = (teamId: string) => {
+    usePeopleViewStore.setState({ returnConversation: null })
+    useTeamStore.getState().selectTeam(teamId)
+  }
   return <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4 sm:px-10 sm:py-8">
     <div>
       <div className="mb-6 flex flex-wrap items-center justify-between gap-4">

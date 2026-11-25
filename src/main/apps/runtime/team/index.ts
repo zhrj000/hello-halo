@@ -13,6 +13,7 @@ import { createTeamChecks } from './checks'
 import { createBoardDigest } from './board-digest'
 import { createBoardArchive } from './board-archive'
 import { createTurnReport } from './turn-report'
+import { createTaskEndNotice, type TaskEndNotice, type TaskEndNoticeSink } from './task-end-notice'
 import { createTeamFolders } from './team-folder'
 import { createWorkMembership, createWorkReachability } from './membership'
 import type { TeamFolders } from './team-folder'
@@ -42,7 +43,7 @@ import type {
   TeamToolAudit,
   TeamTriggerContext,
 } from '../../../../shared/apps/team-types'
-import { buildTeamSessionKey, isRemoteMember, TEAM_DEFAULT_TURN_TIMEOUT_MS } from '../../../../shared/apps/team-types'
+import { buildTeamSessionKey, isRemoteMember, memberDisplayName, TEAM_DEFAULT_TURN_TIMEOUT_MS } from '../../../../shared/apps/team-types'
 import type { SchedulerService } from '../../../platform/scheduler'
 import { parseTeamSessionKey, parseTeamChatKey } from '../../../../shared/apps/im-keys'
 import type { ImSessionContext } from '../im-channels/im-prompt'
@@ -292,7 +293,8 @@ export interface TeamRuntime {
    * team it is working in.
    */
   getTeamName(teamId: string): string | null
-  describeTaskSource(teamId: string, epochId: string): { teamName: string; label?: string } | null
+  /** `appId` adds that member's name in the team, for a notification to say who is asking. */
+  describeTaskSource(teamId: string, epochId: string, appId?: string): { teamName: string; label?: string; memberName?: string } | null
   /**
    * Resume a team turn after the user answered a member's escalation. Returns
    * false when the team/epoch is gone (caller must NOT fall back to a solo run).
@@ -433,6 +435,12 @@ export interface CreateTeamRuntimeDeps {
   deliverToSpaceCoordinator?: DeliverToSpaceConversation
   /** Root for per-collaboration scratch folders. */
   teamFolderRoot: string
+  /**
+   * Where "a task I care about finished / failed" is told to the person
+   * (bootstrap wires it to the desktop notification). Absent → nothing is told
+   * (test runtimes). See `task-end-notice.ts`.
+   */
+  taskEndNotice?: TaskEndNoticeSink
 }
 
 export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
@@ -442,6 +450,8 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
 
   // Late-bound: bus is created first, orchestration hooks are forwarded once wired.
   let orchestration: Orchestration | null = null
+  // Built once the work probes below exist; seals reach it through orchestration's observer.
+  let taskEndNotice: TaskEndNotice | null = null
   // Checks are built last (they wake through orchestration) but orchestration
   // must end their epoch's checks on seal — the same forward-shim trick.
   let checks: TeamChecks | null = null
@@ -540,6 +550,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
       digest.clearEpoch(epochId)
       archive.clearEpoch(epochId)
       turnReport.clearEpoch(epochId)
+      taskEndNotice?.noteSealed(teamId, epochId, endReason)
       deps.onEpochSealed?.(teamId, epochId)
     },
   })
@@ -604,6 +615,19 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     return false
   }
 
+  if (deps.taskEndNotice) {
+    const notice = createTaskEndNotice({
+      store,
+      sink: deps.taskEndNotice,
+      // A person's own turn in the task is watched too, not only the bus's.
+      isWorking: (teamId, epochId) => hasPendingWork(teamId, epochId) || orchestration!.getActiveEpochIds(teamId).has(epochId),
+      isWaitingOnPerson: (teamId, epochId) =>
+        listWorkMembers(store, teamId, epochId).some(member => deps.hasPendingEscalation?.(member.appId, teamId, epochId) === true),
+    })
+    workChanged.event(({ teamId, epochId }) => notice.noteWorkChanged(teamId, epochId))
+    taskEndNotice = notice
+  }
+
   console.log(`${LOG_TAG} created`)
 
   return {
@@ -641,6 +665,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     noteMemberTurnEnded: (params, options) => {
       orchestration!.noteMemberTurnEnded(params)
       if (options?.report !== false) turnReport.noteTurnEnded(params)
+      taskEndNotice?.noteTurnEnded(params)
       workChanged.fire({ teamId: params.teamId, epochId: params.epochId })
     },
     reconcileAwaitingDecision: (appId) => orchestration!.reconcileAwaitingDecision(appId),
@@ -684,11 +709,15 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     buildPromptContext: (teamId, selfAppId, epochId) =>
       orchestration!.buildPromptContext(teamId, selfAppId, epochId),
     getTeamName: (teamId) => store.getTeamById(teamId)?.name ?? null,
-    describeTaskSource: (teamId, epochId) => {
+    describeTaskSource: (teamId, epochId, appId) => {
       const team = store.getTeamById(teamId)
       const epoch = store.getEpochById(epochId)
-      return team && epoch?.teamId === teamId
-        ? { teamName: team.name, label: epoch.workItem?.title || epoch.title || undefined } : null
+      if (!team || epoch?.teamId !== teamId) return null
+      const member = appId ? store.getMember(teamId, appId, epochId) : null
+      return {
+        teamName: team.name, label: epoch.workItem?.title || epoch.title || undefined,
+        ...(member ? { memberName: memberDisplayName(member) } : {}),
+      }
     },
     resumeFromEscalation: (params) => orchestration!.resumeFromEscalation(params),
   }

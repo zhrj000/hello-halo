@@ -60,6 +60,7 @@ import { setRequestCredentialResolver } from '../openai-compat-router'
 import { initSpaceMemoryConsolidation, disposeSpaceMemoryConsolidation } from '../services/memory-consolidation'
 import { markExtendedServicesReady } from './state'
 import { getMainWindow, sendToRenderer } from '../foundation/window.service'
+import { notifyAppEvent } from '../services/notification.service'
 import { initializeHealthSystem, setSessionCleanupFn } from '../services/health'
 import { closeAllV2Sessions, initializeSdkRuntime, closeSdkRuntime, requestSessionRebuild } from '../services/agent'
 import { registerHealthHandlers } from '../ipc/health'
@@ -1149,6 +1150,17 @@ async function initializePlatformAndApps(onWorkspaceDataReady: () => void): Prom
           sendToRenderer(TEAM_EVENTS.updated, payload)
         },
         teamFolderRoot,
+        // A task the person started or their digital humans took part in, finished
+        // or failed, on the machine hosting the team. Completion follows the same
+        // "task notifications" setting as a conversation; a failure always says so,
+        // as a team member waiting on a person does.
+        taskEndNotice: {
+          viewerIdentity: () => getLocalIdentity().id,
+          completionEnabled: () => {
+            try { return getConfig().notifications?.taskComplete === true } catch { return false }
+          },
+          notify: (title, body, target) => notifyAppEvent(title, body, target),
+        },
         // A space coordinator's "inbox" is its space conversation: member
         // replies and turn-end notices land there through the conversation
         // delivery layer (join compatible work, otherwise start a separate turn). A full

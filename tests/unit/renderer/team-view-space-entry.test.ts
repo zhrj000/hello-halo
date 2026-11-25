@@ -78,9 +78,11 @@ const detail = (team: { ephemeral?: boolean; coordinatorConversationId?: string 
 const render = (team: Parameters<typeof detail>[0], spaceEntry: boolean, legacyCoordinator = false) =>
   renderToStaticMarkup(createElement(TeamView, { detail: detail(team, legacyCoordinator), spaceEntry }))
 
-// The team page loads on first use; render once to start it, then the page is in.
-render({ ephemeral: false, coordinatorConversationId: null }, false)
-await new Promise(resolve => setTimeout(resolve, 0))
+// The team page loads on first use: render to start it, and wait until it is in. A
+// busy run can take more than one tick, so this waits for the page, not for a tick.
+for (let waited = 0; !render({ ephemeral: false, coordinatorConversationId: null }, false).includes('data-team-page') && waited < 2000; waited += 10) {
+  await new Promise(resolve => setTimeout(resolve, 10))
+}
 
 describe('team view opened from a space conversation', () => {
   it('shows a temporary collaboration as its single room', () => {

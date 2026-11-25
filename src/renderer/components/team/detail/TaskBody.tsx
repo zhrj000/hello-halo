@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react'
 import { ChevronRight, Loader2, MinusCircle, Square } from 'lucide-react'
-import type { TeamActivity, TeamConversation, TeamDetail } from '../../../../shared/apps/team-types'
+import type { TeamActivity, TeamConversation, TeamDetail, TeamPendingEscalation } from '../../../../shared/apps/team-types'
 import { parseSpaceCoordinatorAppId } from '../../../../shared/apps/team-types'
 import { useTranslation } from '../../../i18n'
 import { formatTimeAgo } from '../../../utils/format-time'
@@ -16,7 +16,7 @@ import type { TaskActivityData } from '../workbench/useTaskActivity'
 import { isExchange } from './crew'
 import { DecisionCard, type HeldDecisions } from './DecisionCard'
 import { isLive, isTeamWork, taskState, type TaskStateKey } from './status'
-import { endedText, MemberConversationsLink, MoreToggle, sourceLabel, taskOrigin, taskSource } from './task-ui'
+import { CollaborationRecordLink, endedText, MoreToggle, sourceLabel, taskOrigin, taskSource } from './task-ui'
 import { DECISION_ANCHOR, STEPS_HIDDEN_KEY, stepsHidden, TaskSteps } from './TaskSteps'
 import { TeamScene } from './TeamScene'
 
@@ -58,9 +58,9 @@ export function TaskBody({ detail, task, taskSpaceId, data, overview, held, open
   held: HeldDecisions
   open: Readonly<Record<string, boolean>>
   setOpen: Dispatch<SetStateAction<Record<string, boolean>>>
-  /** A member's work on this task. */
+  /** Turns to a member: the task's conversation on that member, or its record where there is none. */
   onOpenMember: (appId: string) => void
-  /** Everyone's exchanges. */
+  /** The collaboration record. */
   onOpenAll: () => void
   onOpenExchange: (activityId: string) => void
   /** Where a person writes to pick stopped work up again; absent where that conversation is already open. */
@@ -84,19 +84,27 @@ export function TaskBody({ detail, task, taskSpaceId, data, overview, held, open
   }
   // A plain question has no steps or exchanges to show; empty sections would only suggest missing work.
   const plainChat = !isTeamWork(task) && !data.tasks.length && !data.activities.length && !data.reports.reports.length
-  const scene = isTeamWork(task) && !plainChat && task.kind !== 'im'
+  // Who is on it and who is free stays in view on every team task, worked on or not: a
+  // question to the lead alone still shows the lead waiting and the rest free. An IM
+  // chat has no team in the room, so it has none.
+  const scene = task.kind !== 'im'
 
   return <>
     <StatusLine detail={detail} task={task} stateKey={stateKey} data={data} onWaits={showDecisions} onEnd={onEnd} />
 
-    <Brief detail={detail} task={task} data={data} progress={progress} stateKey={stateKey} onOpenMember={onOpenMember} onContinue={onContinue} />
+    {/* An open task's questions sit inside its brief, under the line naming who waits; a finished one has none to hold them. */}
+    <div ref={decisionsRef}>
+      <Brief detail={detail} task={task} data={data} progress={progress} stateKey={stateKey} onOpenMember={onOpenMember} onContinue={onContinue}
+        decisions={decisions} renderDecision={decision => <DecisionCard embedded detail={detail} decision={decision} task={task} taskSpaceId={taskSpaceId}
+          open={answeringId === decision.entryId} onOpen={value => setAnswering(value ? decision : null)} />} />
 
-    {decisions.length > 0 && <div ref={decisionsRef} className="space-y-2.5">
-      {decisions.map(decision => <div key={decision.entryId} data-decision-id={decision.entryId}>
-        <DecisionCard detail={detail} decision={decision} task={task} taskSpaceId={taskSpaceId}
-          open={answeringId === decision.entryId} onOpen={value => setAnswering(value ? decision : null)} />
-      </div>)}
-    </div>}
+      {progress.finished && decisions.length > 0 && <div className="my-5 space-y-2.5">
+        {decisions.map(decision => <div key={decision.entryId} data-decision-id={decision.entryId}>
+          <DecisionCard detail={detail} decision={decision} task={task} taskSpaceId={taskSpaceId}
+            open={answeringId === decision.entryId} onOpen={value => setAnswering(value ? decision : null)} />
+        </div>)}
+      </div>}
+    </div>
 
     {scene && <TeamScene detail={detail} epochId={task.epochId} progress={progress} ended={!!task.endedManually} data={data} onOpenMember={onOpenMember} onOpenAll={onOpenAll} onOpenExchange={onOpenExchange} />}
 
@@ -107,7 +115,7 @@ export function TaskBody({ detail, task, taskSpaceId, data, overview, held, open
     <Outputs data={data} outputs={outputs} />
 
     {/* Without a scene, nothing above leads to the exchanges. */}
-    {!plainChat && !scene && <section className={SECTION}><MemberConversationsLink count={data.activities.filter(isExchange).length} onOpen={onOpenAll} /></section>}
+    {!plainChat && !scene && <section className={SECTION}><CollaborationRecordLink count={data.activities.filter(isExchange).length} onOpen={onOpenAll} /></section>}
   </>
 }
 
@@ -147,9 +155,12 @@ function StatusLine({ detail, task, stateKey, data, onWaits, onEnd }: { detail: 
 }
 
 /** Where the task stands right now; a finished task with nothing beyond its status line has none. */
-function Brief({ detail, task, data, progress, stateKey, onOpenMember, onContinue }: {
+function Brief({ detail, task, data, progress, stateKey, onOpenMember, onContinue, decisions, renderDecision }: {
   detail: TeamDetail; task: TeamConversation; data: TaskActivityData; progress: TaskProgress; stateKey: TaskStateKey
   onOpenMember: (appId: string) => void; onContinue?: () => void
+  /** Questions waiting on the user (and the one being answered); each sits under the line naming who asks. */
+  decisions: readonly TeamPendingEscalation[]
+  renderDecision: (decision: TeamPendingEscalation) => ReactNode
 }) {
   const { t } = useTranslation()
   const roster = detail.roster
@@ -160,7 +171,7 @@ function Brief({ detail, task, data, progress, stateKey, onOpenMember, onContinu
   }
 
   const nameOf = (appId: string | null) => (appId ? progressMemberName(roster, appId, t) : t('Unassigned'))
-  // The face and name lead to the member's work inside this team.
+  // The face and name turn to the member, as everywhere else on the task.
   const who = (text: string, appId: string | null) => namedMember(text, nameOf(appId),
     appId && roster.some(member => member.appId === appId) ? () => onOpenMember(appId) : undefined)
   const items: ReactNode[] = []
@@ -172,7 +183,11 @@ function Brief({ detail, task, data, progress, stateKey, onOpenMember, onContinu
     items.push(<BriefItem key={row.id} text={who(t('{{name}} ran into an error: {{reason}}', { name: NAME, reason: row.note?.trim() || row.title }), row.assigneeAppId)} />)
   }
   const errors = items.length
-  for (const decision of data.pending) items.push(<BriefItem key={decision.entryId} text={who(t('{{name}} is waiting for your answer.', { name: NAME }), decision.appId)} />)
+  // Who waits, then what they ask and the way to answer, in the same card.
+  for (const decision of decisions) items.push(<div key={decision.entryId} data-decision-id={decision.entryId} className="[&:not(:first-child)]:mt-3">
+    <BriefItem text={who(t('{{name}} is waiting for your answer.', { name: NAME }), decision.appId)} />
+    {renderDecision(decision)}
+  </div>)
   // Only its owner can answer: nothing for this user to do, yet the work is held on it.
   const pendingIds = new Set(data.pending.map(decision => decision.appId))
   const held = progress.members
@@ -190,7 +205,7 @@ function Brief({ detail, task, data, progress, stateKey, onOpenMember, onContinu
     : !single?.owner ? t('Waiting for someone')
       : [t('Waiting for {{owner}} to confirm', { owner: single.owner }), single.question && t('Waited {{time}}', { time: formatSpan(Math.max(0, Date.now() - single.question.at), t) })].filter(Boolean).join(' · ')
   const stalled = !items.length && stateKey === 'idle' && taskState(detail, task).fact.kind === 'stalled'
-  const { tone, title } = activeBriefHead(errors > 0, data.pending.length > 0, stalled ? t('Stopped partway') : heldTitle, t)
+  const { tone, title } = activeBriefHead(errors > 0, decisions.length > 0, stalled ? t('Stopped partway') : heldTitle, t)
   // Work whose member failed or waits is told above; the footer names only work that is moving.
   const working = isLive(stateKey) ? subtaskBoard(data.tasks, progress.members).groups.find(group => group.id === 'working')?.tasks ?? [] : []
   if (stalled) {

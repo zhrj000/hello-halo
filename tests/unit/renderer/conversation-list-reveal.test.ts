@@ -1,13 +1,14 @@
 /**
  * The conversation list follows the open conversation: one opened from
- * elsewhere (a conversation link, search, another space) is scrolled into view
- * in its pane, in a section the list opens for the moment, or as its dot on the
- * icon strip. A row picked in the list itself never moves it, and once reached
- * a row is not chased again when the list reorders.
+ * elsewhere (a conversation link, search, a notification, another space) is
+ * scrolled into view below the sticky section heading — shown even when it
+ * sits past "More", in a section or group the list opens for the moment, or as
+ * its dot on the icon strip. A row picked in the list itself never moves it,
+ * and once reached a row is not chased again when the list reorders.
  *
  * No DOM here: React's hooks are replaced by a small runner that also runs
- * effects, the virtual lists are reached through their `ref` and measurement
- * callbacks, and the returned element tree is searched.
+ * effects, the scrolling column is a stand-in whose rows are the `data-row-key`
+ * lines of the latest render, and the returned element tree is searched.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -18,7 +19,7 @@ const env = vi.hoisted(() => {
     configurable: true,
     value: { getItem: (key: string) => items.get(key) ?? null, setItem: (key: string, value: string) => { items.set(key, value) }, removeItem: (key: string) => { items.delete(key) } },
   })
-  return { mount: null as any, chat: null as any, rows: [] as any[] }
+  return { mount: null as any, chat: null as any, rows: [] as any[], tree: null as any, team: { tasks: [] as any[], teams: [] as any[] }, statuses: new Map<string, string>() }
 })
 vi.mock('react', async original => ({
   ...await original<typeof import('react')>(),
@@ -29,13 +30,14 @@ vi.mock('react', async original => ({
   useEffect: (run: any, deps?: unknown[]) => env.mount.effect(run, deps),
   useLayoutEffect: (run: any, deps?: unknown[]) => env.mount.effect(run, deps),
 }))
-vi.mock('react-virtuoso', () => ({ Virtuoso: function Virtuoso() { return null } }))
 vi.mock('zustand/react/shallow', () => ({ useShallow: (select: any) => select }))
 vi.mock('../../../src/renderer/api', () => ({ api: {} }))
 vi.mock('../../../src/renderer/i18n', () => ({ useTranslation: () => ({ t: (text: string) => text }) }))
+vi.mock('../../../src/renderer/stores/team-chat-seen.store', async original => ({ ...await original<typeof import('../../../src/renderer/stores/team-chat-seen.store')>(), useTeamChatSeenStore: (select: any) => select({ seen: {}, since: 1000, markSeen: () => {} }) }))
+vi.mock('../../../src/renderer/stores/apps-page.store', () => ({ useAppsPageStore: { getState: () => ({ setShowInstallDialog: () => {} }) } }))
 vi.mock('../../../src/renderer/stores/chat.store', () => ({
   useChatStore: Object.assign((select: any) => select(env.chat), { getState: () => env.chat }),
-  useAllConversationStatuses: () => new Map(),
+  useAllConversationStatuses: () => env.statuses,
 }))
 vi.mock('../../../src/renderer/stores/apps.store', () => ({ useAppsStore: (select: any) => select({ appStates: {} }) }))
 vi.mock('../../../src/renderer/stores/space.store', () => ({ useSpaceStore: { getState: () => ({ currentSpace: { id: env.chat.currentSpaceId } }) } }))
@@ -50,21 +52,15 @@ vi.mock('../../../src/renderer/stores/conversation-list-prefs.store', async orig
 vi.mock('../../../src/renderer/hooks/useAppChatConversationRows', () => ({ useAppChatConversationRows: () => env.rows }))
 vi.mock('../../../src/renderer/hooks/useTeamConversationRows', async original => ({
   ...await original<typeof import('../../../src/renderer/hooks/useTeamConversationRows')>(),
-  useTeamConversationRows: () => ({ tasks: [], teams: [], pins: [], hidden: {}, error: false }),
-}))
-vi.mock('../../../src/renderer/components/chat/conversation-list-panes', () => ({
-  ROW_HEIGHT: 32,
-  usePaneResize: () => ({ height: 160, dragging: false, handleProps: {} }),
-  PaneResizeHandle: () => null,
+  useTeamConversationRows: () => ({ tasks: env.team.tasks, teams: env.team.teams, pins: [], hidden: {}, error: false, cursor: null, loadMore: () => {}, refresh: () => {} }),
 }))
 vi.mock('../../../src/renderer/components/apps/AutomationAvatar', () => ({ AutomationAvatar: () => null }))
 vi.mock('../../../src/renderer/services/home-telemetry', () => ({ markEntry: vi.fn(), trackHome: vi.fn(), trackNavigate: vi.fn() }))
 vi.mock('../../../src/renderer/utils/conversation-navigation', () => ({ openDigitalHumanChat: vi.fn() }))
-vi.mock('../../../src/renderer/utils/people-navigation', () => ({ openPersonActivity: vi.fn() }))
+vi.mock('../../../src/renderer/utils/people-navigation', () => ({ openPersonActivity: vi.fn(), openPersonTeam: vi.fn() }))
 
-import { Virtuoso } from 'react-virtuoso'
 import { ConversationList } from '../../../src/renderer/components/chat/ConversationList'
-import { planReveal } from '../../../src/renderer/components/chat/conversation-list-reveal'
+import { planReveal, STICKY_HEADING_PX } from '../../../src/renderer/components/chat/conversation-list-reveal'
 import { useConversationListPrefs } from '../../../src/renderer/stores/conversation-list-prefs.store'
 
 /** One mounted list: its hook state lives here, and its effects run after each render. */
@@ -102,6 +98,8 @@ class Mount {
     this.index = 0
     env.mount = this
     const tree = (ConversationList as unknown as { type: (props: object) => unknown }).type({})
+    // Effects see the rows this render drew, as they would in the DOM.
+    env.tree = tree
     const queued = this.queued
     this.queued = []
     for (const run of queued) run()
@@ -119,97 +117,100 @@ class Mount {
 /** Every element in the tree, without rendering child components. */
 function nodes(tree: any): any[] { if (!tree || typeof tree !== 'object') return []; if (Array.isArray(tree)) return tree.flatMap(nodes); return [tree, ...[tree.props?.children].flat(Infinity).flatMap(nodes)] }
 
-type Pane = 'pinned' | 'digital-humans' | 'conversations'
+const ROW = 32
+/** Keys of the rows the list draws, in order. */
+const drawnKeys = (tree: any): string[] => nodes(tree).filter(node => node.props?.['data-row-key']).map(node => node.props['data-row-key'])
 
-/** The virtual list drawing `pane`, told apart by what its rows are. */
-function paneList(tree: unknown, pane: Pane) {
-  return nodes(tree).find(node => node.type === Virtuoso && node.props.data.some((row: any) => {
-    if (pane === 'digital-humans') return row.type === 'dh-header'
-    if (row.type !== 'item' && row.type !== 'dh-item') return false
-    const starred = row.type === 'item' ? row.conversation.starred : row.row.starred
-    return pane === 'pinned' ? !!starred && (row.type === 'item' || row.standalone) : !starred && row.type === 'item'
-  }))
+/**
+ * A stand-in for the scrolling column: `height` px tall, its rows 32px each
+ * under a 40px heading, laid out from the latest render.
+ */
+function column(height = 100) {
+  const box = { top: 0, bottom: height }
+  const el: any = {
+    scrollTop: 0,
+    getBoundingClientRect: () => box,
+    querySelectorAll: () => drawnKeys(env.tree).map((key, i) => ({
+      dataset: { rowKey: key },
+      getBoundingClientRect: () => ({ top: 40 + i * ROW - el.scrollTop, bottom: 40 + (i + 1) * ROW - el.scrollTop }),
+    })),
+  }
+  return el
 }
 
-/** Lets `pane`'s list come up the way Virtuoso does: attached, then measured. */
-function attach(tree: unknown, pane: Pane, { measure = true } = {}) {
-  const list = paneList(tree, pane)
-  if (!list) throw new Error(`The ${pane} pane is not drawn`)
-  const handle = { scrollIntoView: vi.fn(), measure: () => list.props.totalListHeightChanged(640) }
-  list.props.scrollerRef({})
-  list.ref(handle)
-  if (measure) handle.measure()
-  return handle
+/** Puts the stand-in column under the list's scroller ref. */
+function attach(tree: any, height?: number) {
+  const scroller = nodes(tree).find(node => node.ref && typeof node.ref === 'object' && 'current' in node.ref && /overflow-y-auto/.test(node.props.className ?? '') && 'data-fill-pane' in node.props)
+  if (!scroller) throw new Error('The list column is not drawn')
+  const el = column(height)
+  scroller.ref.current = el
+  return el
 }
 
-/** Virtuoso re-renders: its handle ref is detached and a new handle attached, the list staying mounted. */
-function rerenderList(tree: unknown, pane: Pane) {
-  const list = paneList(tree, pane)
-  const handle = { scrollIntoView: vi.fn() }
-  list.ref(null)
-  list.ref(handle)
-  return handle
+/** Where `key` sits in the column now, or undefined when not drawn. */
+function placed(el: any, key: string) {
+  const row = el.querySelectorAll().find((item: any) => item.dataset.rowKey === key)
+  return row?.getBoundingClientRect()
+}
+
+/** In full view under the sticky heading. */
+function inView(el: any, key: string) {
+  const rect = placed(el, key)
+  return !!rect && rect.top >= STICKY_HEADING_PX && rect.bottom <= el.getBoundingClientRect().bottom
 }
 
 const conversation = (id: string, starred = false) => ({ id, spaceId: 's1', title: `Title ${id}`, updatedAt: '2026-11-01T00:00:00.000Z', starred })
 /** Forty conversations, newest first. */
 const archive = (space = 's1', prefix = 'c') => Array.from({ length: 40 }, (_, i) => ({ ...conversation(`${prefix}${String(i).padStart(2, '0')}`), spaceId: space }))
 
-function spaceState(conversations: any[], current: string | null, selectedAppChat: any = null) {
-  return { conversations, currentConversationId: current, selectedAppChat }
+function spaceState(conversations: any[], current: string | null, selectedAppChat: any = null, selectedTeamChat: any = null) {
+  return { conversations, currentConversationId: current, selectedAppChat, selectedTeamChat }
 }
 
 /** Opens `id` the way a link or another surface does: only the store's pointer moves. */
 function openElsewhere(id: string) {
   const state = env.chat.spaceStates.get(env.chat.currentSpaceId)
-  env.chat.spaceStates.set(env.chat.currentSpaceId, { ...state, currentConversationId: id, selectedAppChat: null })
+  env.chat.spaceStates.set(env.chat.currentSpaceId, { ...state, currentConversationId: id, selectedAppChat: null, selectedTeamChat: null })
 }
 
-function dhRow(appId: string, id: string, starred = false) {
-  return { id, appId, appSpaceId: 's1', digitalHumanName: appId, isDefault: false, displayName: id, updatedAt: 1, messageCount: 2, starred, status: 'active', uninstalled: false }
-}
-
-let frames: Array<() => void> = []
-/** Runs the animation frames requested so far, and those they request, up to `count` rounds. */
-function runFrames(count = 10) {
-  for (let i = 0; i < count && frames.length > 0; i++) {
-    const due = frames
-    frames = []
-    for (const frame of due) frame()
-  }
+function dhRow(appId: string, id: string, updatedAt = 1) {
+  return { id, appId, appSpaceId: 's1', digitalHumanName: appId, isDefault: false, displayName: id, updatedAt, messageCount: 2, starred: false, status: 'active', uninstalled: false }
 }
 
 beforeEach(() => {
-  frames = []
-  vi.stubGlobal('requestAnimationFrame', (frame: () => void) => frames.push(frame))
+  vi.stubGlobal('requestAnimationFrame', () => 0)
   env.rows = []
+  env.statuses = new Map()
+  env.team = { tasks: [], teams: [] }
   env.chat = {
     currentSpaceId: 's1',
     spaceStates: new Map([['s1', spaceState(archive(), 'c00')]]),
     selectConversation: vi.fn((id: string) => openElsewhere(id)),
   }
-  useConversationListPrefs.setState({ sectionOpen: {}, appGroupOpen: {}, listFolded: {} })
+  useConversationListPrefs.setState({ sectionOpen: {}, appGroupOpen: {}, shown: {}, listFolded: {} })
 })
 
 afterEach(() => { vi.unstubAllGlobals() })
 
 describe('planReveal', () => {
   const rows = (...keys: string[]) => keys.map(key => ({ key }))
-  const panes = (open = { pinned: true, 'digital-humans': true, conversations: true }) => ({
+  const panes = (open = { pinned: true, teams: true, 'digital-humans': true, conversations: true }) => ({
     pinned: { rows: rows('p1', 'p2'), open: open.pinned },
+    teams: { rows: rows('team:t', 'team:t:e1'), open: open.teams },
     'digital-humans': { rows: rows('dh-header:a', 'd1'), open: open['digital-humans'] },
     conversations: { rows: rows('c1', 'c2', 'c3'), open: open.conversations },
   })
 
-  it('finds the row by id in the pane that draws it', () => {
+  it('finds the row by id in the section that draws it', () => {
     expect(planReveal('c3', panes(), null)).toEqual({ type: 'row', section: 'conversations', index: 2 })
     expect(planReveal('p2', panes(), null)).toEqual({ type: 'row', section: 'pinned', index: 1 })
+    expect(planReveal('team:t:e1', panes(), null)).toEqual({ type: 'row', section: 'teams', index: 1 })
     expect(planReveal('d1', panes(), null)).toEqual({ type: 'row', section: 'digital-humans', index: 1 })
   })
 
   it('opens a folded section first', () => {
-    expect(planReveal('c1', panes({ pinned: true, 'digital-humans': true, conversations: false }), null))
-      .toEqual({ type: 'open', section: 'conversations' })
+    expect(planReveal('team:t:e1', panes({ pinned: true, teams: false, 'digital-humans': true, conversations: true }), null))
+      .toEqual({ type: 'open', section: 'teams' })
   })
 
   it('aims at the dot when the list is folded to its strip', () => {
@@ -223,108 +224,58 @@ describe('planReveal', () => {
 })
 
 describe('the open conversation in the list', () => {
-  it('is scrolled into view once its pane has measured itself, and again when one is opened from elsewhere', () => {
+  it('shows the first five conversations and the open one past them, scrolled below the sticky heading', () => {
     const list = new Mount()
-    const conversations = attach(list.render(), 'conversations', { measure: false })
-    list.render()
-    // Aimed before the viewport is measured, the list would treat it as zero height.
-    expect(conversations.scrollIntoView).not.toHaveBeenCalled()
-    conversations.measure()
-    // On mount the list asks; Virtuoso leaves an already visible row where it is.
-    expect(conversations.scrollIntoView).toHaveBeenCalledTimes(1)
-    expect(conversations.scrollIntoView).toHaveBeenLastCalledWith({ index: 0, behavior: 'auto' })
+    const el = attach(list.render())
+    expect(drawnKeys(env.tree)).toEqual(['c00', 'c01', 'c02', 'c03', 'c04', 'more:conversations'])
 
     openElsewhere('c35')
     list.render()
-    expect(conversations.scrollIntoView).toHaveBeenCalledTimes(2)
-    expect(conversations.scrollIntoView).toHaveBeenLastCalledWith({ index: 35, behavior: 'auto' })
-  })
-
-  it('aims again on the next frames while the list lays out, and stops once another conversation is opened', () => {
-    const list = new Mount()
-    const conversations = attach(list.render(), 'conversations')
-    runFrames()
-    conversations.scrollIntoView.mockClear()
-
-    openElsewhere('c35')
-    list.render()
-    runFrames()
-    expect(conversations.scrollIntoView.mock.calls).toEqual(Array(3).fill([{ index: 35, behavior: 'auto' }]))
-
-    conversations.scrollIntoView.mockClear()
-    openElsewhere('c30')
-    list.render()
-    openElsewhere('c20')
-    list.render()
-    runFrames()
-    expect(conversations.scrollIntoView.mock.calls.filter(([location]) => location.index === 30)).toHaveLength(1)
-    expect(conversations.scrollIntoView.mock.calls.filter(([location]) => location.index === 20)).toHaveLength(3)
-  })
-
-  it('keeps reaching rows after the virtual list re-renders and hands out a new handle', () => {
-    const list = new Mount()
-    const tree = list.render()
-    attach(tree, 'conversations')
-    const renewed = rerenderList(tree, 'conversations')
-
-    openElsewhere('c35')
-    list.render()
-    expect(renewed.scrollIntoView).toHaveBeenLastCalledWith({ index: 35, behavior: 'auto' })
-  })
-
-  it('waits for a remounted list to measure itself again', () => {
-    const list = new Mount()
-    const tree = list.render()
-    attach(tree, 'conversations')
-    paneList(tree, 'conversations').props.scrollerRef(null)
-    paneList(tree, 'conversations').ref(null)
-    const remounted = attach(list.render(), 'conversations', { measure: false })
-
-    openElsewhere('c35')
-    list.render()
-    expect(remounted.scrollIntoView).not.toHaveBeenCalled()
-    remounted.measure()
-    expect(remounted.scrollIntoView).toHaveBeenLastCalledWith({ index: 35, behavior: 'auto' })
+    // The open one takes the fifth place, so the count holds.
+    expect(drawnKeys(env.tree)).toEqual(['c00', 'c01', 'c02', 'c03', 'c35', 'more:conversations'])
+    expect(inView(el, 'c35')).toBe(true)
+    expect(el.scrollTop).toBeGreaterThan(0)
   })
 
   it('is not chased again when the list reorders after it was reached', () => {
     const list = new Mount()
-    const conversations = attach(list.render(), 'conversations')
+    const el = attach(list.render())
     openElsewhere('c35')
     list.render()
-    const before = conversations.scrollIntoView.mock.calls.length
+    const reached = el.scrollTop
 
+    el.scrollTop = 0
     const state = env.chat.spaceStates.get('s1')
     const moved = state.conversations.find((conv: any) => conv.id === 'c35')
     env.chat.spaceStates.set('s1', { ...state, conversations: [moved, ...state.conversations.filter((conv: any) => conv !== moved)] })
     list.render()
-    expect(conversations.scrollIntoView).toHaveBeenCalledTimes(before)
+    expect(reached).toBeGreaterThan(0)
+    expect(el.scrollTop).toBe(0)
   })
 
   it('leaves the list still when the row was picked in the list itself', () => {
     const list = new Mount()
     const tree = list.render()
-    const conversations = attach(tree, 'conversations')
-    const pane = paneList(tree, 'conversations')
-    const row = pane.props.data[3]
-    pane.props.itemContent(3, row).props.onClick()
-    expect(env.chat.selectConversation).toHaveBeenCalledWith('c03')
-
+    const el = attach(tree)
+    el.scrollTop = 0
+    const line = nodes(tree).find(node => node.props?.['data-row-key'] === 'c04')
+    line.props.children.props.onClick()
+    expect(env.chat.selectConversation).toHaveBeenCalledWith('c04')
     list.render()
-    expect(conversations.scrollIntoView).toHaveBeenCalledTimes(1)
+    expect(el.scrollTop).toBe(0)
   })
 
   it('waits for a conversation the list does not hold yet, then reaches it', () => {
     const list = new Mount()
-    const conversations = attach(list.render(), 'conversations')
+    const el = attach(list.render())
     openElsewhere('fresh')
     list.render()
-    expect(conversations.scrollIntoView).toHaveBeenCalledTimes(1)
+    expect(el.scrollTop).toBe(0)
 
     const state = env.chat.spaceStates.get('s1')
     env.chat.spaceStates.set('s1', { ...state, conversations: [...state.conversations, conversation('fresh')] })
     list.render()
-    expect(conversations.scrollIntoView).toHaveBeenLastCalledWith({ index: 40, behavior: 'auto' })
+    expect(inView(el, 'fresh')).toBe(true)
   })
 
   it('opens a folded section for the moment, without saving it as the user\'s choice', () => {
@@ -333,8 +284,7 @@ describe('the open conversation in the list', () => {
     const list = new Mount()
     const tree = list.settle()
     expect(nodes(tree).find(node => node.props?.section === 'conversations').props.collapsed).toBe(false)
-    const conversations = attach(tree, 'conversations')
-    expect(conversations.scrollIntoView).toHaveBeenLastCalledWith({ index: 20, behavior: 'auto' })
+    expect(drawnKeys(tree)).toContain('c20')
     expect(useConversationListPrefs.getState().sectionOpen).toEqual({ s1: { conversations: false } })
 
     // The user's own fold still wins once they use the header.
@@ -342,22 +292,8 @@ describe('the open conversation in the list', () => {
     expect(nodes(list.render()).find(node => node.props?.section === 'conversations').props.collapsed).toBe(true)
   })
 
-  it('reaches a pinned conversation inside a folded pinned section', () => {
-    const pins = Array.from({ length: 8 }, (_, i) => conversation(`p${i}`, true))
-    env.chat.spaceStates.set('s1', spaceState([...pins, ...archive()], 'c00'))
-    useConversationListPrefs.getState().setSectionOpen('s1', 'pinned', false)
-    const list = new Mount()
-    attach(list.render(), 'conversations')
-
-    openElsewhere('p7')
-    const tree = list.settle()
-    const pinned = attach(tree, 'pinned')
-    expect(pinned.scrollIntoView).toHaveBeenLastCalledWith({ index: 7, behavior: 'auto' })
-    expect(useConversationListPrefs.getState().sectionOpen).toEqual({ s1: { pinned: false } })
-  })
-
   it('reaches a digital human\'s conversation in a folded group, leaving the saved folds alone', () => {
-    env.rows = [dhRow('dh1', 'app-chat:dh1:local:direct:c1'), dhRow('dh1', 'app-chat:dh1:local:direct:c2'), dhRow('dh2', 'app-chat:dh2:local:direct:c3')]
+    env.rows = [dhRow('dh1', 'app-chat:dh1:local:direct:c1', 2), dhRow('dh1', 'app-chat:dh1:local:direct:c2', 1), dhRow('dh2', 'app-chat:dh2:local:direct:c3')]
     useConversationListPrefs.getState().setAppGroupOpen('s1', 'dh1', false)
     const list = new Mount()
     list.render()
@@ -365,24 +301,53 @@ describe('the open conversation in the list', () => {
     const state = env.chat.spaceStates.get('s1')
     env.chat.spaceStates.set('s1', { ...state, selectedAppChat: { appId: 'dh1', conversationId: 'app-chat:dh1:local:direct:c2' } })
     const tree = list.settle()
-    const humans = attach(tree, 'digital-humans')
-    const data = paneList(tree, 'digital-humans').props.data
-    const index = data.findIndex((row: any) => row.key === 'app-chat:dh1:local:direct:c2')
-    expect(index).toBeGreaterThan(0)
-    expect(humans.scrollIntoView).toHaveBeenLastCalledWith({ index, behavior: 'auto' })
+    expect(drawnKeys(tree)).toContain('app-chat:dh1:local:direct:c2')
     expect(useConversationListPrefs.getState().appGroupOpen).toEqual({ s1: { dh1: false } })
     expect(useConversationListPrefs.getState().sectionOpen).toEqual({})
   })
 
+  it('reaches a team task opened from a notification, opening its folded group for the moment', () => {
+    env.team.teams = [{ id: 'crew', name: 'Crew' }]
+    env.team.tasks = Array.from({ length: 8 }, (_, i) => ({ epochId: `e${i}`, teamId: 'crew', spaceId: 's1', teamName: 'Crew', kind: 'native', label: `Task ${i}`, readonly: false, startedAt: 1, lastActivityAt: 100 - i }))
+    useConversationListPrefs.getState().setAppGroupOpen('s1', 'team:crew', false)
+    const list = new Mount()
+    const el = attach(list.render(), 120)
+
+    const state = env.chat.spaceStates.get('s1')
+    env.chat.spaceStates.set('s1', { ...state, selectedTeamChat: { teamId: 'crew', epochId: 'e7', teamName: 'Crew' } })
+    list.settle()
+    expect(drawnKeys(env.tree)).toContain('team:crew:e7')
+    expect(inView(el, 'team:crew:e7')).toBe(true)
+    expect(useConversationListPrefs.getState().appGroupOpen).toEqual({ s1: { 'team:crew': false } })
+  })
+
+  it('keeps a section folded after leaving the page and coming back', () => {
+    env.team.teams = [{ id: 'back', name: 'Back' }]
+    env.team.tasks = [{ epochId: 'b1', teamId: 'back', spaceId: 's1', teamName: 'Back', kind: 'native', label: 'Task', readonly: false, startedAt: 1, lastActivityAt: 1 }]
+    useConversationListPrefs.getState().setSectionOpen('s1', 'conversations', false)
+    const state = env.chat.spaceStates.get('s1')
+    env.chat.spaceStates.set('s1', { ...state, currentConversationId: 'c20', selectedTeamChat: { teamId: 'back', epochId: 'b1', teamName: 'Back' } })
+    const section = (tree: any, name: string) => nodes(tree).find(node => node.props?.section === name)
+    // Opened from elsewhere: both its sections open for the moment.
+    let tree = new Mount().settle()
+    expect(section(tree, 'teams').props.collapsed).toBe(false)
+
+    // The person folds teams, the list leaves the screen and comes back.
+    section(tree, 'teams').props.onToggle('teams')
+    tree = new Mount().settle()
+    expect(section(tree, 'teams').props.collapsed).toBe(true)
+    expect(section(tree, 'conversations').props.collapsed).toBe(false)
+  })
+
   it('is reached in another space after the switch', () => {
     const list = new Mount()
-    const conversations = attach(list.render(), 'conversations')
+    const el = attach(list.render())
     env.chat.spaceStates.set('s2', spaceState(archive('s2', 'd'), null))
     env.chat.currentSpaceId = 's2'
     list.render()
     openElsewhere('d25')
     list.render()
-    expect(conversations.scrollIntoView).toHaveBeenLastCalledWith({ index: 25, behavior: 'auto' })
+    expect(inView(el, 'd25')).toBe(true)
   })
 
   it('scrolls the dot into view on the icon strip and leaves the list folded', () => {
@@ -390,20 +355,72 @@ describe('the open conversation in the list', () => {
     const list = new Mount()
     const tree = list.render()
     const strip = nodes(tree).find(node => node.ref && typeof node.ref === 'object' && 'current' in node.ref && /overflow-y-auto/.test(node.props.className))
-    const dots = strip.props.children.map((_: unknown, i: number) => ({ getBoundingClientRect: () => ({ top: 40 + i * 26 - column.scrollTop, bottom: 64 + i * 26 - column.scrollTop }) }))
-    const column = { scrollTop: 0, children: dots, getBoundingClientRect: () => ({ top: 40, bottom: 640 }) }
-    strip.ref.current = column
+    const dots = Array.from({ length: 10 }, (_, i) => ({ getBoundingClientRect: () => ({ top: 40 + i * 26 - stripColumn.scrollTop, bottom: 64 + i * 26 - stripColumn.scrollTop }) }))
+    const stripColumn = { scrollTop: 0, children: dots, getBoundingClientRect: () => ({ top: 40, bottom: 100 }) }
+    strip.ref.current = stripColumn
 
     openElsewhere('c35')
     const folded = list.render()
-    // Dot 35 ends at 64 + 35 * 26 = 974: just enough to bring its bottom to the column's.
-    expect(column.scrollTop).toBe(974 - 640)
+    // The strip shows the open list's rows: c00–c03 and the open c35, dot 4, ending at 64 + 4 * 26 = 168.
+    expect(stripColumn.scrollTop).toBe(168 - 100)
     expect(nodes(folded).some(node => /(^|\s)w-14(\s|$)/.test(node.props?.className ?? ''))).toBe(true)
     expect(nodes(folded).find(node => node.key === 'c35').props['aria-current']).toBe(true)
+  })
+})
 
-    // A visible dot does not move the strip.
-    openElsewhere('c30')
+describe('"More"', () => {
+  it('opens a list further, keeps that for the space, and goes back to the first few', () => {
+    const list = new Mount()
+    const more = () => nodes(env.tree).find(node => node.props?.['data-row-key'] === 'more:conversations').props.children
     list.render()
-    expect(column.scrollTop).toBe(974 - 640)
+    more().props.onClick()
+    list.render()
+    expect(drawnKeys(env.tree).filter(key => key.startsWith('c'))).toHaveLength(25)
+    expect(useConversationListPrefs.getState().shown).toEqual({ s1: { conversations: 25 } })
+    more().props.onClick()
+    list.render()
+    expect(drawnKeys(env.tree).filter(key => key.startsWith('c'))).toHaveLength(40)
+    // Everything shown: the line now goes back.
+    expect(more().props.children).toBe('Show less')
+    more().props.onClick()
+    list.render()
+    expect(drawnKeys(env.tree).filter(key => key.startsWith('c'))).toHaveLength(5)
+  })
+})
+
+describe('what needs the person', () => {
+  it('comes first in its list, says why at the end of the row, and keeps its place while open until something else is opened', () => {
+    env.statuses = new Map([['c30', 'completed-unseen'], ['c20', 'waiting']])
+    const list = new Mount()
+    list.render()
+    const conversationKeys = () => drawnKeys(env.tree).filter(key => key.startsWith('c'))
+    expect(conversationKeys()).toEqual(['c20', 'c30', 'c00', 'c01', 'c02'])
+
+    // Opened from the list: the finish is seen, but the row stays where it was clicked.
+    const line = nodes(env.tree).find(node => node.props?.['data-row-key'] === 'c30')
+    line.props.children.props.onClick()
+    env.statuses = new Map([['c20', 'waiting']])
+    list.render()
+    list.render()
+    expect(conversationKeys()).toEqual(['c20', 'c30', 'c00', 'c01', 'c02'])
+
+    // Something else opened: it goes back to its place by time.
+    const other = nodes(env.tree).find(node => node.props?.['data-row-key'] === 'c01')
+    other.props.children.props.onClick()
+    list.render()
+    list.render()
+    expect(conversationKeys()).toEqual(['c20', 'c00', 'c01', 'c02', 'c03'])
+  })
+
+  it('puts a team with a question first in its section and opens it', () => {
+    env.team.teams = [{ id: 'quiet', name: 'Quiet' }, { id: 'asking', name: 'Asking' }]
+    env.team.tasks = [
+      { epochId: 'q1', teamId: 'quiet', spaceId: 's1', teamName: 'Quiet', kind: 'native', label: 'q1', readonly: false, startedAt: 1, lastActivityAt: 3 },
+      { epochId: 'a1', teamId: 'asking', spaceId: 's1', teamName: 'Asking', kind: 'native', label: 'a1', readonly: false, startedAt: 1, lastActivityAt: 2, waitingForMe: true },
+    ]
+    const list = new Mount()
+    list.render()
+    const keys = drawnKeys(env.tree).filter(key => key.startsWith('team:'))
+    expect(keys).toEqual(['team:asking', 'team:asking:a1', 'team:quiet'])
   })
 })

@@ -4,8 +4,7 @@
  * never shows, or a scheduled task.
  *
  * No DOM here: React's hooks are replaced by a small runner and the returned
- * element tree is searched; the virtualized panes are read through their
- * `itemContent`, the way Virtuoso renders a row.
+ * element tree is searched; each row is the child of its `data-row-key` line.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -19,7 +18,6 @@ const env = vi.hoisted(() => ({
   prefs: {} as any,
 }))
 vi.mock('react', async original => ({ ...await original<typeof import('react')>(), useState: (value: any) => env.runner.state(value), useRef: (value: any) => env.runner.ref(value), useMemo: (compute: any) => compute(), useCallback: (fn: any) => fn, useEffect: () => {}, useLayoutEffect: () => {} }))
-vi.mock('react-virtuoso', () => ({ Virtuoso: function Virtuoso() { return null } }))
 vi.mock('zustand/react/shallow', () => ({ useShallow: (select: any) => select }))
 vi.mock('../../../src/renderer/api', () => ({ api: {} }))
 vi.mock('../../../src/renderer/i18n', () => ({ useTranslation: () => ({ t: (text: string) => text }) }))
@@ -38,11 +36,8 @@ vi.mock('../../../src/renderer/stores/conversation-list-prefs.store', async orig
 vi.mock('../../../src/renderer/hooks/useAppChatConversationRows', () => ({ useAppChatConversationRows: () => env.rows }))
 vi.mock('../../../src/renderer/stores/team-chat-pins.store', () => ({ useTeamChatPinsStore: (select: any) => select({ pinned: {} }), teamTaskKey: (team: string, epoch: string) => `team:${team}:${epoch}` }))
 vi.mock('../../../src/renderer/stores/team-chat-hidden.store', () => ({ useTeamChatHiddenStore: Object.assign((select: any) => select({ hidden: {}, hide: vi.fn(), reconcile: vi.fn() }), { getState: () => ({ restore: vi.fn() }) }) }))
-vi.mock('../../../src/renderer/components/chat/conversation-list-panes', () => ({
-  ROW_HEIGHT: 32,
-  usePaneResize: () => ({ height: 160, dragging: false, handleProps: {} }),
-  PaneResizeHandle: () => null,
-}))
+vi.mock('../../../src/renderer/stores/team-chat-seen.store', async original => ({ ...await original<typeof import('../../../src/renderer/stores/team-chat-seen.store')>(), useTeamChatSeenStore: (select: any) => select({ seen: {}, since: 0, markSeen: () => {} }) }))
+vi.mock('../../../src/renderer/stores/apps-page.store', () => ({ useAppsPageStore: { getState: () => ({ setShowInstallDialog: () => {} }) } }))
 vi.mock('../../../src/renderer/components/apps/AutomationAvatar', () => ({ AutomationAvatar: () => null }))
 vi.mock('../../../src/renderer/services/home-telemetry', () => ({ markEntry: vi.fn(), trackHome: vi.fn(), trackNavigate: vi.fn() }))
 vi.mock('../../../src/renderer/utils/conversation-navigation', () => ({ openDigitalHumanChat: vi.fn() }))
@@ -73,11 +68,12 @@ function listedChat(appId: string) {
   }
 }
 
+/** The element drawn for the row with `key`. */
+const rowFor = (tree: any, key: string) => nodes(tree).find(node => node.props?.['data-row-key'] === key)?.props.children
+
 /** The status dot a digital human's group heading shows, if any. */
 function headingDot(appId: string) {
-  const pane = nodes(render()).find(node => node.props?.data?.some?.((row: any) => row.type === 'dh-header'))
-  const heading = pane.props.data.find((row: any) => row.type === 'dh-header' && row.appId === appId)
-  const group = pane.props.itemContent(0, heading)
+  const group = rowFor(render(), `dh-header:${appId}`)
   return group.props.status?.type === TaskStatusDot ? group.props.status.props.status : undefined
 }
 
@@ -89,7 +85,7 @@ beforeEach(() => {
   env.statuses = new Map()
   env.rows = []
   env.apps = { appStates: {} }
-  env.prefs = { sectionOpen: {}, appGroupOpen: {}, setAppGroupOpen: vi.fn(), setSectionOpen: vi.fn() }
+  env.prefs = { sectionOpen: {}, appGroupOpen: {}, shown: {}, paneHeights: {}, setAppGroupOpen: vi.fn(), setSectionOpen: vi.fn(), setShown: vi.fn(), setPaneHeight: vi.fn() }
 })
 
 describe('a digital human at work', () => {
@@ -99,8 +95,7 @@ describe('a digital human at work', () => {
 
   it('shares header geometry and separates team detail navigation from group expansion', () => {
     env.rows = [listedChat('lin')]
-    const pane = nodes(render()).find(node => node.props?.data?.some?.((row: any) => row.type === 'dh-header'))
-    const personal = pane.props.itemContent(0, pane.props.data.find((row: any) => row.type === 'dh-header'))
+    const personal = rowFor(render(), 'dh-header:lin')
     const onToggle = vi.fn()
     const onSelected = vi.fn()
     const team = new ComponentRunner().render(() => TeamConversationRow({
@@ -129,17 +124,18 @@ describe('a digital human at work', () => {
     env.rows = [chat]
     env.statuses = new Map([[chat.id, status]])
     env.prefs.appGroupOpen = { s1: { lin: true } }
-    const pane = nodes(render()).find(node => node.props?.data?.some?.((row: any) => row.type === 'dh-header'))
-    const header = pane.props.itemContent(0, pane.props.data.find((row: any) => row.type === 'dh-header'))
+    const tree = render()
+    const header = rowFor(tree, 'dh-header:lin')
     const layout = ConversationGroupHeader(header.props)
     expect(layout.props.className).toContain('pl-2.5')
     expect(layout.props.children[0].props.className).toContain('justify-start')
     expect(layout.props.className).toContain('gap-0.5')
-    expect(layout.props.children[0].props.className).toContain('w-[18px]')
+    expect(layout.props.children[0].props.className).toContain('w-5')
     expect(layout.props.children[1].props.className).toContain('pl-1.5')
-    const item = pane.props.itemContent(0, { type: 'dh-item', key: chat.id, row: chat, standalone: false })
-    expect(item.props.className).toContain('pl-9')
-    if (status !== 'idle') expect(nodes(item).find(node => node.type === TaskStatusDot)?.props.className).toContain('absolute left-6')
+    // 10px inset + 20px face + 2px gap + 6px name padding: titles start where the name does.
+    const item = rowFor(tree, chat.id)
+    expect(item.props.className).toContain('pl-[38px]')
+    if (status !== 'idle') expect(nodes(item).find(node => node.type === TaskStatusDot)?.props.className).toContain('absolute left-[26px]')
   })
 
   it('shows on its heading while it answers an IM chat the list does not show', () => {

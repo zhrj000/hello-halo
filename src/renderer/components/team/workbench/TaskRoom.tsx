@@ -22,7 +22,7 @@ import { ownedTaskMembers } from './members'
 import { navigateToConversation } from '../../../utils/conversation-navigation'
 import { ConversationReferenceScope } from '../../references'
 
-export function TaskRoom({ detail, task, selectedAppId, onSelectMember, onCreated, onActivity, boardState, decisionTarget, tasks, onTask, onExecution, blocked = false, homepageConversation = false, returnToMain, viewOnly }: {
+export function TaskRoom({ detail, task, selectedAppId, onSelectMember, onCreated, onActivity, boardState, decisionTarget, decisionSeq, tasks, onTask, onExecution, blocked = false, homepageConversation = false, returnToMain, viewOnly }: {
   blocked?: boolean; homepageConversation?: boolean
   /** A temporary team's member, watched from inside the conversation that leads the team: nobody else may message it. */
   returnToMain?: () => void
@@ -32,7 +32,9 @@ export function TaskRoom({ detail, task, selectedAppId, onSelectMember, onCreate
    */
   viewOnly?: { header?: ReactNode; reason?: string; action?: ReactNode; members?: readonly string[] }
   detail: TeamDetail; task: TeamConversation | null; selectedAppId: string | null; onSelectMember: (member: RosterMember) => void
-  onCreated: (id: string) => void; onActivity: (activityId?: string) => void; boardState: TaskBoardState; decisionTarget?: string; tasks: TeamConversation[]; onTask: (id: string, decisionEntry?: boolean) => void; onExecution: (appId: string) => void
+  onCreated: (id: string) => void; onActivity: (activityId?: string) => void; boardState: TaskBoardState; decisionTarget?: string
+  /** A new value asks for `decisionTarget` again, even when it did not change. */
+  decisionSeq?: number; tasks: TeamConversation[]; onTask: (id: string, decisionEntry?: boolean) => void; onExecution: (appId: string) => void
 }) {
   const { t } = useTranslation()
   const apps = useAppsStore(s => s.apps)
@@ -59,7 +61,7 @@ export function TaskRoom({ detail, task, selectedAppId, onSelectMember, onCreate
   ]).values()]
   const pending = decisions.filter(entry => !entry.userResponse && !entry.content.resolution)
   const [focusedDecision, setFocusedDecision] = useState<string | null>(null)
-  useEffect(() => { if (decisionTarget) setFocusedDecision(decisionTarget) }, [decisionTarget])
+  useEffect(() => { if (decisionTarget) setFocusedDecision(decisionTarget) }, [decisionTarget, decisionSeq])
   const focusDecision = (entry: (typeof pending)[number]) => {
     if (ids.includes(entry.appId)) {
       setDefault(detail.team.id, entry.appId)

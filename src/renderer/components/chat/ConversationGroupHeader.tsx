@@ -13,7 +13,7 @@ export function ConversationGroupHeader({ avatar, name, collapsed, onToggle, onN
   status?: ReactNode
 }) {
   return <div className={cn('group flex w-full items-center gap-0.5 rounded-sm pl-2.5 pr-1 mt-0.5 transition-colors ease-halo', disabled ? 'opacity-40' : 'hover:bg-secondary')}>
-    <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-start">{avatar}</span>
+    <span className="flex h-5 w-5 shrink-0 items-center justify-start">{avatar}</span>
     <button type="button" aria-expanded={!collapsed} onClick={onToggle} className={cn('flex flex-1 min-w-0 items-center pl-1.5 py-1.5 text-[13px] font-medium', disabled ? 'cursor-not-allowed' : 'text-foreground/80 theme-dark:text-muted-foreground')}>
       <span className="min-w-0 truncate">{name}</span>{status}
     </button>

@@ -17,6 +17,24 @@ import { undeliveredParties } from '../../../../shared/apps/team-failures'
 import { activityLevel, conversationMessages, decisionMessageId, COLLABORATION_PREVIEW_LIMIT, taskConversationRows, type SharedTaskDecision } from './model'
 import { UndeliveredNote } from './UndeliveredNote'
 
+/**
+ * Marks the question a person was just brought to, so the jump is seen even
+ * when it was already on screen: the question card (not its name row, so the
+ * avatar stays clear) takes a ring in its own amber, set a little apart, that
+ * fades out. Once per arrival, never repeated: it says "here", not a state.
+ * Without motion it holds still for a moment and then goes.
+ */
+function markArrival(article: HTMLElement) {
+  const card = article.lastElementChild as HTMLElement | null
+  if (!card || typeof card.animate !== 'function') return
+  const ring = (alpha: number) => ({ outline: `2px solid hsl(var(--halo-warning) / ${alpha})`, outlineOffset: '3px' })
+  const still = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
+  card.animate(still
+    ? [ring(0.6), ring(0.6)]
+    : [{ ...ring(0.6), offset: 0 }, { ...ring(0.6), offset: 0.5 }, { ...ring(0), offset: 1 }],
+  { duration: 1800, easing: 'ease-out' })
+}
+
 export function TaskConversation({ messages, activities, epochId, appId, detail, showEmpty, working = false, onActivity, decisions = [], onAnswered, focusDecision, onDecisionFocused, emptyActions, onHumanConversation, taskCompleted = false, homepageConversation = false, readonly = false, authorName, liveReply, onOpenMember, revealActivity, onActivityRevealed, endingShownBelow }: {
   messages: Message[]; activities: TeamActivity[]; epochId: string | null; appId?: string; detail: TeamDetail; showEmpty: boolean; onActivity: (id?: string) => void
   /** The member is running a turn here, drawn by `liveReply`, so the conversation is not empty. */
@@ -106,6 +124,7 @@ export function TaskConversation({ messages, activities, epochId, appId, detail,
     }
     const frame = requestAnimationFrame(() => {
       card.scrollIntoView({ block: 'center' })
+      markArrival(card)
       // Land in the reply box when there is one, so the user can answer right away.
       const target = card.querySelector<HTMLElement>('textarea:not([disabled]), input:not([type="hidden"]):not([disabled])') ?? card
       target.focus({ preventScroll: true })

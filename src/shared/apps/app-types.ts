@@ -48,6 +48,20 @@ export interface AppChatInjectRequest {
   images?: import('../types/image-attachment').ImageAttachment[]
 }
 
+/**
+ * What became of an addition. `delivered: false` alone: no turn was running,
+ * send it as a new message. `stopped`: the person stopped that turn, the text
+ * goes back to them. `afterTurn`: the running turn serves someone else
+ * (`servesOther`) and never takes the owner's words; send it as the owner's
+ * next message, which waits for that turn to end.
+ */
+export interface AppChatInjectResult {
+  delivered: boolean
+  stopped?: true
+  afterTurn?: true
+  servesOther?: 'colleague' | 'guest'
+}
+
 /** Engine ownership accompanying a history read, without starting that engine. */
 export interface AppChatEngineMetadata {
   engineId?: import('../types/engine').EngineId

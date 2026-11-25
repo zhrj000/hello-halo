@@ -45,6 +45,16 @@ describe('in-app toasts of a digital human', () => {
     expect(other).not.toBe(first)
   })
 
+  it('gives a team task its own toast, so a lead asking in two tasks keeps both', () => {
+    notifyAppEvent('Crew · Launch', 'Lead: which date?', { appId: 'lead', teamId: 'crew', epochId: 'launch' })
+    notifyAppEvent('Crew · Pricing', 'Lead: which tier?', { appId: 'lead', teamId: 'crew', epochId: 'pricing' })
+    notifyAppEvent('Crew · Launch', 'Writer: draft ready', { appId: 'writer', teamId: 'crew', epochId: 'launch' })
+
+    const [launch, pricing, launchAgain] = toastIds()
+    expect(launch).not.toBe(pricing)
+    expect(launchAgain).toBe(launch)
+  })
+
   it('leaves toasts that belong to no digital human as they were', () => {
     notifyAppEvent('Halo', 'Something happened')
 

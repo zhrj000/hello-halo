@@ -2,11 +2,17 @@
  * Conversation List - Resizable sidebar for multiple conversations
  * Self-contained: subscribes to its own data from stores, no data props from parent.
  * Supports drag-to-resize, inline title editing, and conversation management.
+ *
+ * Pinned stays on top in a pane of its own (drag its edge for more room); below
+ * it Teams, Digital Humans and Conversations share one scrolling column. The
+ * heading of the section being read stays on top, and those of sections further
+ * down wait at the bottom with their state, so none is ever out of reach: a
+ * click there scrolls to it. Each list shows its first few and keeps the rest
+ * behind "More"; what needs the person comes first (see conversation-list-model).
  */
 
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, memo } from 'react'
 import { createPortal } from 'react-dom'
-import { Virtuoso, type Components } from 'react-virtuoso'
 import { useShallow } from 'zustand/react/shallow'
 import { Plus } from '../icons/ToolIcons'
 import { EllipsisVertical, Pin, Pencil, Trash2, ChevronRight } from 'lucide-react'
@@ -19,8 +25,9 @@ import { useAppChatPinsStore } from '../../stores/app-chat-pins.store'
 import {
   useConversationListPrefs, isSectionOpen, isListFolded, type ConversationSection, type ConversationListLayout,
 } from '../../stores/conversation-list-prefs.store'
-import { ROW_HEIGHT, usePaneResize, PaneResizeHandle } from './conversation-list-panes'
-import { useConversationReveal } from './conversation-list-reveal'
+import { SCROLLING_SECTIONS, STICKY_HEADING_PX, useConversationReveal } from './conversation-list-reveal'
+import { usePaneResize, PaneResizeHandle } from './conversation-list-panes'
+import { LIST_PEEK, MORE_STEP, attentionFirst, attentionRank, headingStatus, nextShown, peek, rowRank, type HeldRow, type Peeked } from './conversation-list-model'
 import { api } from '../../api'
 import { cn } from '../../lib/utils'
 import { TaskStatusDot } from '../pulse/TaskStatusDot'
@@ -33,9 +40,12 @@ import type { ConversationMeta, TaskStatus } from '../../types'
 import { markEntry, trackHome, trackNavigate } from '../../services/home-telemetry'
 import { openDigitalHumanChat } from '../../utils/conversation-navigation'
 import { openPersonActivity } from '../../utils/people-navigation'
-import { buildTeamRows, useTeamConversationRows, type TeamListRow } from '../../hooks/useTeamConversationRows'
+import { buildTeamGroups, useTeamConversationRows, type TeamListRow } from '../../hooks/useTeamConversationRows'
+import { teamTaskKey } from '../../stores/team-chat-pins.store'
+import { teamTaskStatus, useTeamChatSeenStore } from '../../stores/team-chat-seen.store'
 import { TeamConversationRow } from './TeamConversationRow'
 import { ConversationGroupHeader } from './ConversationGroupHeader'
+import { TeamAvatar } from '../team/TeamAvatar'
 
 // Width constraints (in pixels)
 const MIN_WIDTH = 140
@@ -88,14 +98,14 @@ function hoverCardFor(
   }
 }
 
-/** Flattened row fed to `Virtuoso` — a digital human's sub-header and its
- * sessions share one list instead of nested groups (see history:
- * `GroupedVirtuoso`'s separate groups API had a rendering bug where
- * header/item data could desync). */
+/** One line of the list: a group heading and its rows share one flat list per section. */
 type ConversationRow =
   | TeamListRow
   | { type: 'item'; key: string; conversation: ConversationMeta }
-  | { type: 'dh-header'; key: string; appId: string; name: string; uninstalled: boolean; collapsed: boolean }
+  /** `status`: shown after the name — what is most urgent inside while folded, else whether it works anywhere. */
+  | { type: 'dh-header'; key: string; appId: string; name: string; uninstalled: boolean; collapsed: boolean; status?: TaskStatus }
+  /** The way to the rest of a list (`list` is its key in the "More" choices), or back to its first few. */
+  | { type: 'more'; key: string; list: string; rest: number; expanded: boolean; step: number; unit: 'rows' | 'teams' | 'digital-humans'; nested: boolean }
   /** `standalone` rows sit outside their digital human's section (i.e. in
    *  Pinned), so they carry the avatar/name context the section header would
    *  otherwise provide. */
@@ -103,11 +113,9 @@ type ConversationRow =
 
 type PinnedRow = Extract<ConversationRow, { type: 'item' | 'dh-item' }>
 
-/** Which status the folded digital-humans header shows when several sessions need attention. */
-const ATTENTION_ORDER: TaskStatus[] = ['waiting', 'error', 'completed-unseen', 'generating']
-
 const EMPTY_SECTION_CHOICES: Partial<Record<ConversationSection, boolean>> = {}
 const EMPTY_GROUP_CHOICES: Record<string, boolean> = {}
+const EMPTY_SHOWN: Record<string, number> = {}
 
 /** The sections and digital-human groups the list opened on its own (not the user). */
 interface AutoOpen {
@@ -115,29 +123,25 @@ interface AutoOpen {
   apps: ReadonlySet<string>
 }
 const NO_AUTO_OPEN: AutoOpen = { sections: new Set(), apps: new Set() }
-
 /**
- * The scroller takes no padding: Virtuoso's viewport is absolutely positioned
- * at top 0 and width 100% of the scroller's padding box, so side padding shifts
- * rows right without narrowing them (clipping their right edge) and vertical
- * padding is ignored. Side spacing lives on each row instead, and the top and
- * bottom spacing are Header/Footer spacers. `flow-root` keeps a header row's
- * top margin inside the row, where Virtuoso measures it.
+ * Kept per space outside the component, so leaving the home page and coming
+ * back finds the list as it was: what it had opened on its own stays open, and
+ * a conversation that was already shown does not open its folded section again.
  */
-const PaddedRow: Components<ConversationRow>['Item'] = ({ children, item: _item, context: _context, ...props }) => (
-  <div {...props} className="flow-root px-2 pb-0.5">{children}</div>
-)
-const listComponents: Components<ConversationRow> = {
-  Item: PaddedRow,
-  Header: () => <div className="h-1" />,
-  Footer: () => <div className="h-3" />,
+const autoOpenKept = new Map<string, AutoOpen>()
+const selectionShown = new Map<string, string>()
+/** True the first time `selection` is seen for `key` (a space and what opens for it). */
+function firstShowing(key: string, selection: string): boolean {
+  if (selectionShown.get(key) === selection) return false
+  selectionShown.set(key, selection)
+  return true
 }
-/** Pinned rows sit right under their header, and the pane's own bottom padding ends them. */
-const pinnedListComponents: Components<ConversationRow> = { Item: PaddedRow }
 
 // Titles run to the row's edge and fade out instead of ending in an ellipsis;
 // the hover actions float over that edge rather than reserving room for it.
 const ROW_TITLE = 'flex-1 min-w-0 overflow-hidden whitespace-nowrap [mask-image:linear-gradient(to_right,black_calc(100%_-_20px),transparent)]'
+// Always in view (touch has no hover); gives way to the row actions.
+const ROW_TIME = 'shrink-0 text-[11px] font-normal tabular-nums text-faint-foreground transition-opacity group-hover:opacity-0 group-data-[menu-open]:opacity-0 group-has-[:focus-visible]:opacity-0'
 // Shown only while the row itself is highlighted (hover, open menu, keyboard
 // focus), since their fade-in backdrop is the row's highlight colour.
 const ROW_ACTIONS = 'absolute inset-y-0 right-1.5 flex items-center gap-0.5 pl-5 bg-[linear-gradient(to_right,transparent,hsl(var(--secondary))_20px)] opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto group-data-[menu-open]:opacity-100 group-data-[menu-open]:pointer-events-auto has-[:focus-visible]:opacity-100 has-[:focus-visible]:pointer-events-auto'
@@ -146,10 +150,12 @@ const ROW_HIGHLIGHT = 'data-[menu-open]:bg-secondary data-[menu-open]:text-foreg
 
 /**
  * A top-level section's fold toggle; its open-state arrow shows while the
- * pointer is anywhere in its own section (the `group/section` container).
+ * pointer is on the heading (the `group/section` container). Waiting at the
+ * bottom of the column (`docked`), it says what is inside and how much, and a
+ * click goes to the section instead of folding it.
  * No uppercase/letter-spacing: both are no-ops on CJK labels and only loosen them oddly.
  */
-function SectionHeaderButton({ section, label, hint, collapsed, attention, onToggle }: {
+function SectionHeaderButton({ section, label, hint, collapsed, attention, onToggle, docked = false, count, onJump, className }: {
   section: ConversationSection
   label: string
   /** Hover-only: the distinction between sections is one-time knowledge, not worth permanent space. */
@@ -158,24 +164,38 @@ function SectionHeaderButton({ section, label, hint, collapsed, attention, onTog
   /** Shown while folded, so a session needing the user isn't hidden with it. */
   attention?: TaskStatus
   onToggle: (section: ConversationSection) => void
+  docked?: boolean
+  /** How many it lists, shown while docked. */
+  count?: number
+  onJump?: (section: ConversationSection) => void
+  className?: string
 }) {
   return (
     <button
       type="button"
       onClick={() => {
+        if (docked && onJump) {
+          trackHome('home.conversation.section', { section, action: 'jump' })
+          // Going to a folded section is going to nothing: open it on the way.
+          if (collapsed) onToggle(section)
+          onJump(section)
+          return
+        }
         trackHome('home.conversation.section', { section, action: collapsed ? 'expand' : 'collapse' })
         onToggle(section)
       }}
       aria-expanded={!collapsed}
       title={hint}
       // pl-2.5 matches the rows' inset, so a label starts where its titles do.
-      className="group flex w-full items-center gap-1 rounded-sm pl-2.5 pr-1.5 pb-1 text-xs font-medium text-subtle-foreground hover:text-muted-foreground transition-colors ease-halo"
+      className={cn('group flex w-full items-center gap-1 rounded-sm pl-2.5 pr-1.5 pb-1 text-xs font-medium text-subtle-foreground hover:text-muted-foreground transition-colors ease-halo', className)}
     >
       <span>{label}</span>
-      {collapsed && attention && <TaskStatusDot status={attention} size="sm" />}
+      {(collapsed || docked) && attention && <TaskStatusDot status={attention} size="sm" />}
+      {docked && count !== undefined && <span className="font-normal tabular-nums text-faint-foreground">{count}</span>}
       <ChevronRight className={cn(
         'ml-auto w-3 h-3 shrink-0 transition-[transform,opacity]',
-        collapsed ? 'opacity-100' : 'rotate-90 opacity-0 group-hover/section:opacity-100 group-focus-visible:opacity-100'
+        docked ? '-rotate-90 opacity-0 group-hover/section:opacity-100 group-focus-visible:opacity-100'
+          : collapsed ? 'opacity-100' : 'rotate-90 opacity-0 group-hover/section:opacity-100 group-focus-visible:opacity-100'
       )} />
     </button>
   )
@@ -224,11 +244,8 @@ function buildPinnedRows(conversations: ConversationMeta[], appChatRows: AppChat
   ].sort((a, b) => b.at - a.at).map(entry => entry.row)
 }
 
-/** Unpinned digital-human sessions under a collapsible sub-header per digital human. */
-function buildDigitalHumanRows(
-  appChatRows: AppChatConversationRow[],
-  isAppGroupOpen: (appId: string, rows: AppChatConversationRow[]) => boolean,
-): ConversationRow[] {
+/** Unpinned digital-human sessions per digital human, in the apps' own order, newest session first. */
+function groupDigitalHumanSessions(appChatRows: AppChatConversationRow[]): { appId: string; rows: AppChatConversationRow[] }[] {
   const byApp = new Map<string, AppChatConversationRow[]>()
   for (const row of appChatRows) {
     if (row.starred) continue
@@ -236,23 +253,13 @@ function buildDigitalHumanRows(
     list.push(row)
     byApp.set(row.appId, list)
   }
+  return [...byApp].map(([appId, rows]) => ({ appId, rows: [...rows].sort((a, b) => b.updatedAt - a.updatedAt) }))
+}
 
-  const out: ConversationRow[] = []
-  for (const [appId, rows] of byApp) {
-    const collapsed = !isAppGroupOpen(appId, rows)
-    out.push({
-      type: 'dh-header',
-      key: `dh-header:${appId}`,
-      appId,
-      name: rows[0].digitalHumanName,
-      uninstalled: rows[0].uninstalled,
-      collapsed,
-    })
-    if (!collapsed) {
-      for (const row of rows) out.push({ type: 'dh-item', key: row.id, row, standalone: false })
-    }
-  }
-  return out
+/** A "More" line for `list`, or nothing when everything already shows. */
+function moreRow(list: string, peeked: Peeked<unknown>, step: number, unit: Extract<ConversationRow, { type: 'more' }>['unit'], nested: boolean): ConversationRow[] {
+  if (peeked.rest === 0 && !peeked.expanded) return []
+  return [{ type: 'more', key: `more:${list}`, list, rest: peeked.rest, expanded: peeked.expanded, step, unit, nested }]
 }
 
 /**
@@ -311,13 +318,15 @@ export const ConversationList = memo(function ConversationList({
   // What the list opens on its own, kept in memory only: the stored prefs hold
   // nothing but the user's own clicks. `sections` and `apps` override a stored
   // fold until the user toggles that section or group again.
-  const [autoOpen, setAutoOpen] = useState<AutoOpen & { space: string }>(() => ({ space: spaceKey, ...NO_AUTO_OPEN }))
-  const auto: AutoOpen = autoOpen.space === spaceKey ? autoOpen : NO_AUTO_OPEN
+  const [autoOpen, setAutoOpen] = useState<AutoOpen & { space: string }>(() => ({ space: spaceKey, ...(autoOpenKept.get(spaceKey) ?? NO_AUTO_OPEN) }))
+  const auto: AutoOpen = autoOpen.space === spaceKey ? autoOpen : autoOpenKept.get(spaceKey) ?? NO_AUTO_OPEN
   const updateAutoOpen = useCallback((change: (prev: AutoOpen) => AutoOpen) => {
     setAutoOpen(prev => {
-      const base = prev.space === spaceKey ? prev : { space: spaceKey, ...NO_AUTO_OPEN }
+      const base = prev.space === spaceKey ? prev : { space: spaceKey, ...(autoOpenKept.get(spaceKey) ?? NO_AUTO_OPEN) }
       const next = change(base)
-      return next.sections === base.sections && next.apps === base.apps ? base : { space: spaceKey, ...next }
+      if (next.sections === base.sections && next.apps === base.apps) return base
+      autoOpenKept.set(spaceKey, next)
+      return { space: spaceKey, ...next }
     })
   }, [spaceKey])
   const autoOpenSection = useCallback((section: ConversationSection) => {
@@ -325,6 +334,7 @@ export const ConversationList = memo(function ConversationList({
   }, [updateAutoOpen])
 
   const pinnedOpen = auto.sections.has('pinned') || isSectionOpen(sectionChoices, 'pinned')
+  const teamsOpen = auto.sections.has('teams') || isSectionOpen(sectionChoices, 'teams')
   const digitalHumansOpen = auto.sections.has('digital-humans') || isSectionOpen(sectionChoices, 'digital-humans')
   const conversationsOpen = auto.sections.has('conversations') || isSectionOpen(sectionChoices, 'conversations')
   const toggleSection = useCallback((section: ConversationSection) => {
@@ -362,10 +372,11 @@ export const ConversationList = memo(function ConversationList({
   const selectedAppChatPinned = !!selectedAppChatId && allAppChatRows.some(row => row.id === selectedAppChatId && row.starred)
   useEffect(() => {
     if (!selectedAppId || !selectedAppChatId || selectedAppChatPinned) return
+    if (!firstShowing(`${spaceKey}|app`, selectedAppChatId)) return
     updateAutoOpen(prev => (prev.sections.has('digital-humans') && prev.apps.has(selectedAppId)
       ? prev
       : { sections: new Set(prev.sections).add('digital-humans'), apps: new Set(prev.apps).add(selectedAppId) }))
-  }, [selectedAppId, selectedAppChatId, selectedAppChatPinned, updateAutoOpen])
+  }, [selectedAppId, selectedAppChatId, selectedAppChatPinned, updateAutoOpen, spaceKey])
   // A group that needs attention stays open after the session settles, unless the user folded it.
   useEffect(() => {
     const waiting = allAppChatRows.filter(row =>
@@ -440,71 +451,254 @@ export const ConversationList = memo(function ConversationList({
     el.style.top = `${top}px`
   }, [hoverCard])
 
-  const teamRows = useMemo(() => buildTeamRows(teamList.tasks, teamList.teams, teamList.pins,
-    id => auto.apps.has(`team:${id}`) || (appGroupChoices[`team:${id}`] ?? selectedTeamChat?.teamId === id), teamList.hidden),
-  [teamList.tasks, teamList.teams, teamList.pins, teamList.hidden, auto.apps, appGroupChoices, selectedTeamChat?.teamId])
+  // ── What each row needs from the person ──
+  const teamSeen = useTeamChatSeenStore(s => s.seen)
+  const teamSeenSince = useTeamChatSeenStore(s => s.since)
+  const teamGroups = useMemo(() => buildTeamGroups(teamList.tasks, teamList.teams, teamList.pins, teamList.hidden),
+    [teamList.tasks, teamList.teams, teamList.pins, teamList.hidden])
+  const teamStatuses = useMemo(() => {
+    const statuses = new Map<string, TaskStatus>()
+    for (const task of teamList.tasks) {
+      const key = teamTaskKey(task.teamId, task.epochId)
+      statuses.set(key, teamTaskStatus(task, teamSeen[key], teamSeenSince))
+    }
+    return statuses
+  }, [teamList.tasks, teamSeen, teamSeenSince])
+  const statusOf = useCallback((key: string): TaskStatus => conversationStatuses.get(key) ?? teamStatuses.get(key) ?? 'idle',
+    [conversationStatuses, teamStatuses])
+  const statusOfRef = useRef(statusOf)
+  statusOfRef.current = statusOf
+
+  // The row on screen: a team task (or its group, for a new one) takes the place
+  // of the regular conversation as a digital human's session does.
+  const selectedKey = selectedTeamChat
+    ? (selectedTeamChat.epochId ? teamTaskKey(selectedTeamChat.teamId, selectedTeamChat.epochId) : `team:${selectedTeamChat.teamId}`)
+    : selectedAppChat ? selectedAppChat.conversationId : currentConversationId
+
+  // A team task on screen is seen, also when it finishes or fails while it is.
+  const selectedTeamTask = selectedTeamChat?.epochId ? teamList.tasks.find(task => task.teamId === selectedTeamChat.teamId && task.epochId === selectedTeamChat.epochId) : undefined
+  const markTeamSeen = useTeamChatSeenStore(s => s.markSeen)
   useEffect(() => {
-    if (!selectedTeamChat) return
-    updateAutoOpen(prev => ({ sections: new Set(prev.sections).add('digital-humans'), apps: new Set(prev.apps).add(`team:${selectedTeamChat.teamId}`) }))
-  }, [selectedTeamChat?.teamId, selectedTeamChat?.epochId, updateAutoOpen])
-  const pinnedRows = useMemo<ConversationRow[]>(() => [...buildPinnedRows(conversations, allAppChatRows), ...teamRows.pinned].sort((a, b) => {
+    if (selectedTeamChat?.epochId) markTeamSeen(teamTaskKey(selectedTeamChat.teamId, selectedTeamChat.epochId))
+  }, [selectedTeamChat?.teamId, selectedTeamChat?.epochId, selectedTeamTask?.finishedAt, selectedTeamTask?.failure, selectedTeamTask?.lastActivityAt, markTeamSeen])
+
+  // A row the person opens while it needs them keeps its place until they open
+  // something else, so it does not move from under the pointer once seen.
+  const [held, setHeld] = useState<HeldRow | null>(null)
+  const heldReached = useRef(false)
+  const holdRow = useCallback((key: string) => {
+    heldReached.current = false
+    const rank = attentionRank(statusOfRef.current(key))
+    setHeld(rank === undefined ? null : { key, rank })
+  }, [])
+  useEffect(() => {
+    if (!held) return
+    if (selectedKey === held.key) { heldReached.current = true; return }
+    if (heldReached.current) { heldReached.current = false; setHeld(null) }
+  }, [selectedKey, held])
+  const rankOf = useCallback((key: string) => rowRank(key, statusOf(key), held), [statusOf, held])
+
+  // ── "More" ──
+  const shownChoices = useConversationListPrefs(s => s.shown[spaceKey]) ?? EMPTY_SHOWN
+  const setShown = useConversationListPrefs(s => s.setShown)
+
+  // ── Sections ──
+  // Opening a team task shows its group, also when it is opened again (e.g. from
+  // a notification) after the person folded the group. A pinned task is shown in
+  // Pinned, so its team's section stays as it was; until the team list has
+  // loaded it is not yet known which, so this waits.
+  const selectedTeamPinned = useMemo(() => {
+    if (!selectedTeamChat) return undefined
+    const group = teamGroups.find(g => g.teamId === selectedTeamChat.teamId)
+    return group ? group.pinned.some(task => task.epochId === selectedTeamChat.epochId) : undefined
+  }, [teamGroups, selectedTeamChat?.teamId, selectedTeamChat?.epochId])
+  useEffect(() => {
+    if (!selectedTeamChat || selectedTeamPinned === undefined) return
+    if (!firstShowing(`${spaceKey}|team`, `${selectedTeamChat.teamId}:${selectedTeamChat.epochId}:${selectedTeamChat.entryId ?? ''}`)) return
+    if (selectedTeamPinned) return
+    updateAutoOpen(prev => ({ sections: new Set(prev.sections).add('teams'), apps: new Set(prev.apps).add(`team:${selectedTeamChat.teamId}`) }))
+  }, [selectedTeamChat?.teamId, selectedTeamChat?.epochId, selectedTeamChat?.entryId, selectedTeamPinned, updateAutoOpen, spaceKey])
+
+  const teamPinnedRows = useMemo<ConversationRow[]>(() => teamGroups.flatMap(group => group.pinned.map(task => {
+    const key = teamTaskKey(group.teamId, task.epochId)
+    return { type: 'team-item' as const, key, task, standalone: true, starred: true, avatar: group.avatar, status: statusOf(key) }
+  })), [teamGroups, statusOf])
+  const pinnedRows = useMemo<ConversationRow[]>(() => [...buildPinnedRows(conversations, allAppChatRows), ...teamPinnedRows].sort((a, b) => {
     const time = (row: ConversationRow) => row.type === 'team-item' ? row.task.lastActivityAt : row.type === 'dh-item' ? row.row.updatedAt : row.type === 'item' ? Date.parse(row.conversation.updatedAt) : 0
     return time(b) - time(a)
-  }), [conversations, allAppChatRows, teamRows.pinned])
-  const digitalHumanRows = useMemo<ConversationRow[]>(() => [...buildDigitalHumanRows(allAppChatRows, isAppGroupOpen), ...teamRows.rows,
-    ...(teamList.error ? [{ type: 'team-retry' as const, key: 'team:retry' }] : [])],
-  [allAppChatRows, isAppGroupOpen, teamRows.rows, teamList.error])
-  const conversationRows = useMemo<ConversationRow[]>(
-    () => conversations.filter(conv => !conv.starred).map(conv => ({ type: 'item', key: conv.id, conversation: conv })),
-    [conversations]
-  )
-  // The icon strip has no headers to unfold, so a session needing the user shows there even when folded.
-  const stripDigitalHumanRows = useMemo(() => {
-    const listed = new Set(digitalHumansOpen ? digitalHumanRows.map(row => row.key) : [])
-    return buildDigitalHumanRows(allAppChatRows, () => true)
-      .filter(row => row.type === 'dh-item' && (listed.has(row.key) || conversationStatuses.has(row.key)))
-  }, [allAppChatRows, digitalHumanRows, digitalHumansOpen, conversationStatuses])
-  const stripRows = useMemo(() => (folded ? [
-    ...(pinnedOpen ? pinnedRows : []),
-    ...stripDigitalHumanRows,
-    ...teamRows.rows.filter(row => row.type === 'team-item'),
-    ...(conversationsOpen ? conversationRows : []),
-  ] : null), [folded, pinnedOpen, pinnedRows, stripDigitalHumanRows, teamRows.rows, conversationsOpen, conversationRows])
+  }), [conversations, allAppChatRows, teamPinnedRows])
+
+  // A team opens on its own while something in it needs the person or is under
+  // way, or holds the open task; a fold the person chose wins.
+  const teamRows = useMemo<ConversationRow[]>(() => {
+    const arranged = teamGroups.map(group => {
+      const keyOf = (task: (typeof group.tasks)[number]) => teamTaskKey(group.teamId, task.epochId)
+      const rows = attentionFirst(group.tasks, task => rankOf(keyOf(task)))
+      const ranks = group.tasks.map(task => rankOf(keyOf(task))).filter((rank): rank is number => rank !== undefined)
+      return { group, rows, keyOf, rank: ranks.length ? Math.min(...ranks) : undefined, heading: headingStatus(group.tasks.map(task => statusOf(keyOf(task)))) }
+    })
+    const ordered = attentionFirst(arranged, entry => entry.rank)
+    const groups = peek(ordered, shownChoices.teams, entry => entry.group.teamId === selectedTeamChat?.teamId)
+    const out: ConversationRow[] = []
+    for (const { group, rows, keyOf, heading } of groups.visible) {
+      const choice = appGroupChoices[group.key]
+      const open = auto.apps.has(group.key) || (choice ?? (heading !== undefined || selectedTeamChat?.teamId === group.teamId))
+      out.push({ type: 'team-header', key: group.key, teamId: group.teamId, name: group.name, collapsed: !open, avatar: group.avatar, ...(heading ? { attention: heading as Exclude<TaskStatus, 'idle'> } : {}) })
+      if (!open) continue
+      const shown = peek(rows, shownChoices[group.key], task => keyOf(task) === selectedKey)
+      for (const task of shown.visible) out.push({ type: 'team-item', key: keyOf(task), task, standalone: false, starred: false, avatar: group.avatar, status: statusOf(keyOf(task)) })
+      out.push(...moreRow(group.key, shown, MORE_STEP.rows, 'rows', true))
+      if (group.tasks.length === 0 && group.pinned.length === 0 && group.hidden === 0) out.push({ type: 'team-empty', key: `team-empty:${group.teamId}`, teamId: group.teamId, name: group.name })
+      if (group.hidden > 0) out.push({ type: 'team-hidden', key: `team-hidden:${group.teamId}`, teamId: group.teamId, count: group.hidden })
+    }
+    out.push(...moreRow('teams', groups, MORE_STEP.groups, 'teams', false))
+    if (teamList.error) out.push({ type: 'team-retry', key: 'team:retry' })
+    return out
+  }, [teamGroups, rankOf, statusOf, shownChoices, selectedTeamChat?.teamId, selectedKey, appGroupChoices, auto.apps, teamList.error])
+  const teamsAttention = useMemo(() => headingStatus(teamGroups.flatMap(group => group.tasks.map(task => statusOf(teamTaskKey(group.teamId, task.epochId))))), [teamGroups, statusOf])
+
+  const digitalHumanRows = useMemo<ConversationRow[]>(() => {
+    const arranged = groupDigitalHumanSessions(allAppChatRows).map(({ appId, rows }) => {
+      const ranks = rows.map(row => rankOf(row.id)).filter((rank): rank is number => rank !== undefined)
+      return { appId, rows: attentionFirst(rows, row => rankOf(row.id)), rank: ranks.length ? Math.min(...ranks) : undefined }
+    })
+    const ordered = attentionFirst(arranged, entry => entry.rank)
+    const groups = peek(ordered, shownChoices['digital-humans'], entry => entry.appId === selectedAppId)
+    const out: ConversationRow[] = []
+    for (const { appId, rows } of groups.visible) {
+      const collapsed = !isAppGroupOpen(appId, rows)
+      const inside = headingStatus(rows.map(row => statusOf(row.id)))
+      const status = collapsed ? headingStatus([inside, workingApps.has(appId) ? 'generating' : undefined]) : workingApps.has(appId) ? 'generating' : undefined
+      out.push({ type: 'dh-header', key: `dh-header:${appId}`, appId, name: rows[0].digitalHumanName, uninstalled: rows[0].uninstalled, collapsed, ...(status ? { status } : {}) })
+      if (collapsed) continue
+      const shown = peek(rows, shownChoices[`dh:${appId}`], row => row.id === selectedKey)
+      for (const row of shown.visible) out.push({ type: 'dh-item', key: row.id, row, standalone: false })
+      out.push(...moreRow(`dh:${appId}`, shown, MORE_STEP.rows, 'rows', true))
+    }
+    out.push(...moreRow('digital-humans', groups, MORE_STEP.groups, 'digital-humans', false))
+    return out
+  }, [allAppChatRows, rankOf, statusOf, shownChoices, selectedAppId, selectedKey, isAppGroupOpen, workingApps])
+
+  const conversationRows = useMemo<ConversationRow[]>(() => {
+    const rows = attentionFirst(conversations.filter(conv => !conv.starred), conv => rankOf(conv.id))
+    const shown = peek(rows, shownChoices.conversations, conv => conv.id === selectedKey)
+    return [
+      ...shown.visible.map(conv => ({ type: 'item' as const, key: conv.id, conversation: conv })),
+      ...moreRow('conversations', shown, MORE_STEP.conversations, 'rows', false),
+    ]
+  }, [conversations, rankOf, shownChoices.conversations, selectedKey])
+  const conversationsAttention = useMemo(() => headingStatus(conversations.filter(conv => !conv.starred).map(conv => statusOf(conv.id))), [conversations, statusOf])
+
+  // The icon strip shows the open list's rows, without headings or "More"; a
+  // session needing the person shows there even inside a folded group.
+  const stripRows = useMemo(() => {
+    if (!folded) return null
+    const listed = (rows: ConversationRow[], open: boolean) => open ? rows.filter(row => row.type === 'item' || row.type === 'dh-item' || row.type === 'team-item') : []
+    const dhListed = new Set(listed(digitalHumanRows, digitalHumansOpen).map(row => row.key))
+    const dhWaiting = allAppChatRows.filter(row => !row.starred && !dhListed.has(row.id) && attentionRank(statusOf(row.id)) !== undefined)
+      .map(row => ({ type: 'dh-item' as const, key: row.id, row, standalone: false }))
+    return [
+      ...listed(pinnedRows, pinnedOpen),
+      ...listed(teamRows, teamsOpen),
+      ...listed(digitalHumanRows, digitalHumansOpen),
+      ...dhWaiting,
+      ...listed(conversationRows, conversationsOpen),
+    ]
+  }, [folded, pinnedRows, pinnedOpen, teamRows, teamsOpen, digitalHumanRows, digitalHumansOpen, allAppChatRows, statusOf, conversationRows, conversationsOpen])
   const reveal = useConversationReveal({
     spaceId: spaceKey,
-    conversationId: selectedAppChat ? selectedAppChat.conversationId : currentConversationId,
+    conversationId: selectedKey,
     panes: {
       pinned: { rows: pinnedRows, open: pinnedOpen },
+      teams: { rows: teamRows, open: teamsOpen },
       'digital-humans': { rows: digitalHumanRows, open: digitalHumansOpen },
       conversations: { rows: conversationRows, open: conversationsOpen },
     },
     strip: stripRows,
     openSection: autoOpenSection,
   })
+  /** Picked in the list: no scrolling to it, and it keeps its place while open. */
+  const pickRow = useCallback((key: string) => {
+    reveal.pickedInList(key)
+    holdRow(key)
+  }, [reveal.pickedInList, holdRow])
   // Its most urgent session status, for the folded digital-humans header; one of
   // its digital humans working anywhere counts as generating.
   const digitalHumanAttention = useMemo(() => {
     const sectionRows = allAppChatRows.filter(row => !row.starred)
-    const statuses = new Set(sectionRows.map(row => conversationStatuses.get(row.id)))
-    if (sectionRows.some(row => workingApps.has(row.appId))) statuses.add('generating')
-    return ATTENTION_ORDER.find(status => statuses.has(status))
-  }, [allAppChatRows, conversationStatuses, workingApps])
+    return headingStatus([...sectionRows.map(row => statusOf(row.id)), sectionRows.some(row => workingApps.has(row.appId)) ? 'generating' : undefined])
+  }, [allAppChatRows, statusOf, workingApps])
 
-  // ── Panes: pinned and digital humans have their own height; conversations take the rest ──
+  // ── Pinned pane: its own height, the scrolling column takes the rest ──
   const listColumnRef = useRef<HTMLDivElement>(null)
-  // Virtuoso doesn't size itself to its rows, so each pane is held at the smaller
-  // of its rows' total height and the pane height.
-  const pinnedPaneRef = useRef<HTMLDivElement>(null)
-  const [pinnedListHeight, setPinnedListHeight] = useState(0)
-  const pinnedResize = usePaneResize('pinned', pinnedPaneRef, listColumnRef, () => pinnedListHeight)
+  const pinnedResize = usePaneResize('pinned', reveal.pinnedRef, listColumnRef, () => reveal.pinnedRef.current?.scrollHeight ?? 0)
 
-  const digitalHumanPaneRef = useRef<HTMLDivElement>(null)
-  const [digitalHumanListHeight, setDigitalHumanListHeight] = useState(0)
-  const digitalHumanResize = usePaneResize('digital-humans', digitalHumanPaneRef, listColumnRef, () => digitalHumanListHeight)
-  // With the conversations pane folded or empty there is nothing to leave room for, so the
-  // digital-humans pane drops its height cap and may grow up to the rest of the column —
-  // but only as tall as its rows, so whatever follows stays right under them.
-  const digitalHumansFill = !conversationsOpen || conversationRows.length === 0
+  // ── Headings of sections further down wait at the bottom of the column ──
+  const scrollingSections = SCROLLING_SECTIONS.filter(section =>
+    (section === 'teams' ? teamRows : section === 'digital-humans' ? digitalHumanRows : conversationRows).length > 0)
+  const sectionAnchors = useRef(new Map<ConversationSection, HTMLElement>())
+  const [docked, setDocked] = useState<ReadonlySet<ConversationSection>>(() => new Set())
+  const scrollingKey = scrollingSections.join(',')
+  useEffect(() => {
+    const column = reveal.scrollerRef.current
+    if (!column || typeof column.addEventListener !== 'function') return
+    let frame = 0
+    const measure = () => {
+      frame = 0
+      const bottom = column.getBoundingClientRect().bottom
+      const sections = scrollingKey ? scrollingKey.split(',') as ConversationSection[] : []
+      const next = new Set<ConversationSection>()
+      const top = column.getBoundingClientRect().top
+      sections.forEach((section, index) => {
+        const anchor = sectionAnchors.current.get(section)
+        const below = sections.length - 1 - index
+        // Its own place is under the headings stacked below it: it is waiting there.
+        if (anchor && anchor.getBoundingClientRect().top > bottom - (below + 1) * STICKY_HEADING_PX + 1) next.add(section)
+        // Scrolled past: its own place has gone above its slot on the stack (so a folded section at
+        // the top of an unscrolled list is not), and the next heading has reached its slot, so every
+        // row of this one has gone by.
+        const after = sections[index + 1] && sectionAnchors.current.get(sections[index + 1])
+        if (anchor && after
+          && anchor.getBoundingClientRect().top - top < index * STICKY_HEADING_PX - 1
+          && after.getBoundingClientRect().top - top <= (index + 1) * STICKY_HEADING_PX + 1) next.add(section)
+      })
+      setDocked(prev => (prev.size === next.size && [...next].every(section => prev.has(section)) ? prev : next))
+    }
+    const schedule = () => { if (!frame) frame = requestAnimationFrame(measure) }
+    measure()
+    column.addEventListener('scroll', schedule, { passive: true })
+    const resize = typeof ResizeObserver === 'function' ? new ResizeObserver(schedule) : null
+    resize?.observe(column)
+    return () => { cancelAnimationFrame(frame); column.removeEventListener('scroll', schedule); resize?.disconnect() }
+  }, [reveal.scrollerRef, scrollingKey, teamRows, digitalHumanRows, conversationRows])
+  const jumpToSection = useCallback((section: ConversationSection) => {
+    // After the next paint, so a section opened by the same click has its rows to scroll to.
+    requestAnimationFrame(() => {
+      const column = reveal.scrollerRef.current
+      const anchor = sectionAnchors.current.get(section)
+      if (!column || !anchor) return
+      // Land with its heading in its own slot, under the headings of the sections above.
+      const above = Math.max(0, scrollingKey.split(',').indexOf(section))
+      const top = column.scrollTop + anchor.getBoundingClientRect().top - column.getBoundingClientRect().top - above * STICKY_HEADING_PX
+      column.scrollTo({ top, behavior: 'smooth' })
+    })
+  }, [reveal.scrollerRef, scrollingKey])
+  const sectionCount: Partial<Record<ConversationSection, number>> = {
+    teams: teamGroups.reduce((sum, group) => sum + group.tasks.length, 0),
+    'digital-humans': allAppChatRows.filter(row => !row.starred).length,
+    conversations: conversations.filter(conv => !conv.starred).length,
+  }
+
+  const showMore = (row: Extract<ConversationRow, { type: 'more' }>) => {
+    trackHome('home.conversation.section', { section: row.nested ? 'group' : row.list, action: row.rest > 0 ? 'more' : 'less' })
+    if (row.rest > 0) {
+      setShown(spaceKey, row.list, nextShown(shownChoices[row.list], row.step))
+      // Team tasks arrive a page at a time: reading further into a team reads the next page.
+      if (row.list.startsWith('team:') || row.list === 'teams') teamList.loadMore()
+    } else {
+      setShown(spaceKey, row.list, undefined)
+    }
+  }
 
   // Handle drag resize
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -653,7 +847,7 @@ export const ConversationList = memo(function ConversationList({
 
   const handleSelectConversation = (conv: ConversationMeta) => {
     trackHome('home.conversation.select', { kind: 'normal', pinned: !!conv.starred })
-    reveal.pickedInList(conv.id)
+    pickRow(conv.id)
     useChatStore.getState().selectConversation(conv.id)
   }
 
@@ -699,7 +893,7 @@ export const ConversationList = memo(function ConversationList({
     if (!spaceId) return
     trackHome('home.conversation.select', { kind: 'digital_human', pinned: row.starred, appId: row.appId })
     markEntry('home_conv_dh')
-    reveal.pickedInList(row.id)
+    pickRow(row.id)
     useChatStore.getState().selectAppChatConversation(spaceId, row.appId, row.id)
   }
 
@@ -744,7 +938,7 @@ export const ConversationList = memo(function ConversationList({
     }
   }
 
-  // Render a single conversation item (used by GroupedVirtuoso)
+  // Render a single conversation item
   const renderConversationItem = useCallback((conversation: ConversationMeta) => {
     const status = conversationStatuses.get(conversation.id) ?? 'idle'
     // currentConversationId stays pointed at the last regular conversation
@@ -805,6 +999,7 @@ export const ConversationList = memo(function ConversationList({
             {status !== 'idle' && <TaskStatusDot status={status} size="sm" />}
 
             <span className={ROW_TITLE}>{conversation.title}</span>
+            <span className={ROW_TIME}>{formatRowTime(conversation.updatedAt, t)}</span>
 
             <div className={ROW_ACTIONS}>
               <button
@@ -855,7 +1050,7 @@ export const ConversationList = memo(function ConversationList({
         className={cn(
           'group relative flex w-full items-center gap-1.5 rounded-sm pr-1.5 py-1.5 text-[13px] transition-colors ease-halo',
           ROW_HIGHLIGHT,
-          standalone ? 'pl-2.5' : 'pl-9',
+          standalone ? 'pl-2.5' : 'pl-[38px]',
           row.uninstalled
             ? 'opacity-40 cursor-not-allowed'
             : 'cursor-pointer',
@@ -871,11 +1066,11 @@ export const ConversationList = memo(function ConversationList({
           <PersonAvatarLink
             appId={row.appId}
             name={row.digitalHumanName}
-            size={16}
+            size={18}
           />
         )}
 
-        {status !== 'idle' && <TaskStatusDot status={status} size="sm" className={standalone ? undefined : 'absolute left-6 top-1/2 -translate-y-1/2'} />}
+        {status !== 'idle' && <TaskStatusDot status={status} size="sm" className={standalone ? undefined : 'absolute left-[26px] top-1/2 -translate-y-1/2'} />}
 
         {isEditing ? (
           <div ref={editContainerRef} className="flex flex-1 items-center gap-1" onClick={(e) => e.stopPropagation()}>
@@ -898,6 +1093,7 @@ export const ConversationList = memo(function ConversationList({
         {row.status === 'paused' && !isEditing && (
           <span className="text-[11px] text-muted-foreground shrink-0">{t('Paused')}</span>
         )}
+        {!isEditing && <span className={ROW_TIME}>{formatRowTime(row.updatedAt, t)}</span>}
 
         {!row.uninstalled && (
           <div className={ROW_ACTIONS}>
@@ -931,10 +1127,10 @@ export const ConversationList = memo(function ConversationList({
   // Fixed-positioned and portaled: the row lists scroll, and a scroll
   // container clips anything reaching past its edge.
   const hoverStatusLabel = hoverCard?.status ? taskStatusLabel(hoverCard.status, t) : undefined
-  // Time leads so it sits in the same spot on every card, whatever follows it.
-  const hoverMeta = hoverCard ? [
-    hoverCard.time && <span key="time" className="shrink-0 tabular-nums">{hoverCard.time}</span>,
-    hoverCard.owner && <span key="owner" className="flex min-w-0 items-center gap-1"><AutomationAvatar name={hoverCard.owner} size={14} /><span className="truncate">{hoverCard.owner}</span></span>,
+  // Three lines, one kind of thing each: whose it is and when (the time always at
+  // the right), the title, then who started it and its state — left out when
+  // there is neither, so a plain conversation's card stays two lines.
+  const hoverFooter = hoverCard ? [
     hoverCard.note && <span key="note" className="min-w-0 truncate">{hoverCard.note}</span>,
     hoverCard.status && hoverStatusLabel && <span key="status" className="flex shrink-0 items-center gap-1"><TaskStatusDot status={hoverCard.status} size="sm" />{hoverStatusLabel}</span>,
   ].filter(Boolean) : []
@@ -943,14 +1139,23 @@ export const ConversationList = memo(function ConversationList({
       ref={hoverCardRef}
       role="tooltip"
       style={{ top: hoverCard.top, left: hoverCard.left }}
-      className="pointer-events-none fixed z-[60] w-max min-w-[140px] max-w-[260px] rounded-lg border border-border-faint bg-popover px-3.5 py-3 shadow-soft"
+      className="pointer-events-none fixed z-[60] w-max min-w-[160px] max-w-[300px] rounded-lg border border-border-faint bg-popover px-3.5 py-3 shadow-soft"
     >
-      {hoverMeta.length > 0 && (
-        <span className="mb-1.5 flex items-center gap-1.5 overflow-hidden whitespace-nowrap text-[11px] leading-[14px] text-faint-foreground">
-          {hoverMeta.flatMap((item, index) => index ? [<span key={`sep-${index}`} aria-hidden="true">·</span>, item] : [item])}
+      {(hoverCard.owner || hoverCard.time) && (
+        <span className="mb-1.5 flex items-center gap-3 text-[11px] leading-4 text-faint-foreground">
+          {hoverCard.owner && <span className="flex min-w-0 items-center gap-1.5">
+            {hoverCard.ownerFaces ? <TeamAvatar faces={hoverCard.ownerFaces} name={hoverCard.owner} size={16} /> : <AutomationAvatar name={hoverCard.owner} size={14} />}
+            <span className="truncate">{hoverCard.owner}</span>
+          </span>}
+          {hoverCard.time && <span className="ml-auto shrink-0 tabular-nums">{hoverCard.time}</span>}
         </span>
       )}
       <span className="block text-[13px] font-medium leading-5 text-foreground line-clamp-3">{hoverCard.label}</span>
+      {hoverFooter.length > 0 && (
+        <span className="mt-1.5 flex items-center gap-1.5 overflow-hidden whitespace-nowrap text-[11px] leading-4 text-faint-foreground">
+          {hoverFooter.flatMap((item, index) => index ? [<span key={`sep-${index}`} aria-hidden="true">·</span>, item] : [item])}
+        </span>
+      )}
     </div>,
     document.body
   )
@@ -967,16 +1172,24 @@ export const ConversationList = memo(function ConversationList({
       onToggle={toggle}
       onNew={() => handleNewAppChat(row.appId)}
       newLabel={t('New conversation with {{name}}', { name: row.name })}
-      avatar={<PersonAvatarLink appId={row.appId} name={row.name} size={18} />}
-      status={workingApps.has(row.appId) && <TaskStatusDot status="generating" size="sm" className="ml-1.5" />}
+      avatar={<PersonAvatarLink appId={row.appId} name={row.name} size={20} />}
+      status={row.status && <TaskStatusDot status={row.status} size="sm" className="ml-1.5" />}
     />
   }
 
   const renderTeamRow = (row: TeamListRow, compact = false) => <TeamConversationRow key={row.key} row={row} spaceId={spaceKey}
     onToggle={(id, open) => toggleAppCollapsed(`team:${id}`, open)} onRefresh={teamList.refresh}
-    onHover={showHoverCard} onHoverEnd={hideHoverCard} compact={compact} />
+    onPick={pickRow} onHover={showHoverCard} onHoverEnd={hideHoverCard} compact={compact} />
+  const renderMoreRow = (row: Extract<ConversationRow, { type: 'more' }>) => <button type="button" onClick={() => showMore(row)}
+    className={cn('flex w-full items-center rounded-sm py-1 pr-1.5 text-left text-xs text-faint-foreground transition-colors ease-halo hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary', row.nested ? 'pl-[38px]' : 'pl-2.5')}>
+    {row.rest === 0 ? t('Show less')
+      : row.unit === 'teams' ? t('{{count}} more teams', { count: row.rest })
+        : row.unit === 'digital-humans' ? t('{{count}} more digital humans', { count: row.rest })
+          : t('{{count}} more', { count: row.rest })}
+  </button>
   const renderListRow = (row: ConversationRow) => {
-    if (row.type === 'team-header' || row.type === 'team-item' || row.type === 'team-retry' || row.type === 'team-hidden') return renderTeamRow(row)
+    if (row.type === 'more') return renderMoreRow(row)
+    if (row.type === 'team-header' || row.type === 'team-item' || row.type === 'team-retry' || row.type === 'team-hidden' || row.type === 'team-empty') return renderTeamRow(row)
     if (row.type === 'dh-header') return renderDigitalHumanHeader(row)
     if (row.type === 'dh-item') return renderAppChatItem(row.row, row.standalone)
     return renderConversationItem(row.conversation)
@@ -1006,7 +1219,7 @@ export const ConversationList = memo(function ConversationList({
         <div ref={reveal.stripRef} className="flex-1 w-full overflow-y-auto px-2 py-1 flex flex-col items-center gap-0.5">
           {stripRows?.map(row => {
             if (row.type === 'team-item') return renderTeamRow(row, true)
-            if (row.type === 'dh-header' || row.type === 'team-header' || row.type === 'team-retry' || row.type === 'team-hidden') return null
+            if (row.type !== 'item' && row.type !== 'dh-item') return null
             const isAppChat = row.type === 'dh-item'
             const id = isAppChat ? row.row.id : row.conversation.id
             const active = isAppChat
@@ -1077,141 +1290,46 @@ export const ConversationList = memo(function ConversationList({
       </div>
 
       <div ref={listColumnRef} className="flex-1 min-h-0 flex flex-col">
+      {/* Pinned stays put: a pane of its own at the top, scrolling inside past its height. */}
       {pinnedRows.length > 0 && (
-        // Shrinkable like the digital-humans pane, so a saved height never pushes the panes below off a shorter window.
         <div className="group/section relative flex min-h-0 flex-col pb-2">
-          <div className="flex-shrink-0 px-2 pt-1">
+          {/* pr-4: the 8px a scrollbar keeps on the right below, so this heading's arrow lines up with theirs. */}
+          <div className="flex-shrink-0 pl-2 pr-4 pt-1">
             <SectionHeaderButton section="pinned" label={t('Pinned')} collapsed={!pinnedOpen} onToggle={toggleSection} />
           </div>
-          {pinnedOpen && (
-            // Virtualized like the panes below: only the visible pins render, however many there are.
-            <div
-              ref={pinnedPaneRef}
-              className="min-h-8"
-              style={{ flex: `0 1 ${Math.min(pinnedResize.height, pinnedListHeight || pinnedRows.length * ROW_HEIGHT)}px` }}
-            >
-              <Virtuoso<ConversationRow>
-                {...reveal.listProps.pinned}
-                data={pinnedRows}
-                overscan={200}
-                computeItemKey={(_, row) => row.key}
-                totalListHeightChanged={height => {
-                  setPinnedListHeight(height)
-                  if (height > 0) reveal.listMeasured('pinned')
-                }}
-                style={{ height: '100%' }}
-                className="overflow-x-hidden"
-                components={pinnedListComponents}
-                itemContent={(_, row) => renderListRow(row)}
-              />
+          {pinnedOpen && <>
+            <div ref={reveal.pinnedRef} className="min-h-8 overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]" style={{ maxHeight: pinnedResize.height }}>
+              {pinnedRows.map(row => <div key={row.key} data-row-key={row.key} className="flow-root px-2 pb-0.5">{renderListRow(row)}</div>)}
             </div>
-          )}
-          {pinnedOpen && (
             <PaneResizeHandle label={t('Resize pinned list')} height={pinnedResize.height} dragging={pinnedResize.dragging} handleProps={pinnedResize.handleProps} />
-          )}
+          </>}
         </div>
       )}
 
-      {digitalHumanRows.length > 0 && (
-        <div
-          data-fill-pane={digitalHumansOpen && digitalHumansFill ? '' : undefined}
-          className={cn(
-            'group/section relative flex flex-col pb-1',
-            pinnedRows.length > 0 && 'border-t border-border-faint',
-            // Shrinkable, so a short window squeezes this pane rather than overflowing the sidebar.
-            // Filling, it grows from zero (flex-1) up to its rows (max-h-max): a basis of its full
-            // rows would make it squeeze the pinned pane in proportion to a long list.
-            digitalHumansOpen && digitalHumansFill ? 'flex-1 min-h-[68px] max-h-max' : 'min-h-0'
-          )}
-        >
-          <div className={cn('flex-shrink-0 px-2', pinnedRows.length > 0 ? 'pt-2.5' : 'pt-1')}>
-            <SectionHeaderButton
-              section="digital-humans"
-              label={t('Digital Humans')}
-              hint={t('Conversations with digital humans available in this workspace')}
-              collapsed={!digitalHumansOpen}
-              attention={digitalHumanAttention}
-              onToggle={toggleSection}
-            />
-          </div>
-          {digitalHumansOpen && (
-            <div
-              ref={digitalHumanPaneRef}
-              className="min-h-8"
-              style={{
-                flex: `0 1 ${Math.min(
-                  digitalHumansFill ? Infinity : digitalHumanResize.height,
-                  digitalHumanListHeight || digitalHumanRows.length * ROW_HEIGHT,
-                )}px`,
-              }}
-            >
-              <Virtuoso
-                {...reveal.listProps['digital-humans']}
-                data={digitalHumanRows}
-                overscan={200}
-                totalListHeightChanged={height => {
-                  setDigitalHumanListHeight(height)
-                  if (height > 0) reveal.listMeasured('digital-humans')
-                }}
-                style={{ height: '100%' }}
-                className="overflow-x-hidden"
-                components={listComponents}
-                endReached={teamList.loadMore}
-                itemContent={(_, row) => renderListRow(row)}
-              />
-            </div>
-          )}
-          {digitalHumansOpen && !digitalHumansFill && (
-            <PaneResizeHandle
-              label={t('Resize digital humans list')}
-              height={digitalHumanResize.height}
-              dragging={digitalHumanResize.dragging}
-              handleProps={digitalHumanResize.handleProps}
-            />
-          )}
-        </div>
-      )}
-
-      {conversationRows.length > 0 && (
-        <div
-          data-fill-pane={conversationsOpen ? '' : undefined}
-          className={cn(
-            'group/section flex flex-col',
-            (pinnedRows.length > 0 || digitalHumanRows.length > 0) && 'border-t border-border-faint',
-            // Open, it keeps its header and one row however the panes above are sized; folded, it is the
-            // sidebar's last line and gets the same bottom room the list's footer gives rows.
-            conversationsOpen ? 'flex-1 min-h-[68px]' : 'flex-shrink-0 pb-3'
-          )}
-        >
-          <div className={cn('flex-shrink-0 px-2', pinnedRows.length > 0 || digitalHumanRows.length > 0 ? 'pt-2.5' : 'pt-1')}>
-            <SectionHeaderButton
-              section="conversations"
-              label={t('Conversations')}
-              hint={t('Your direct conversations with Halo')}
-              collapsed={!conversationsOpen}
-              onToggle={toggleSection}
-            />
-          </div>
-          {/* Virtualized for performance with large lists */}
-          {conversationsOpen && (
-            <div className="flex-1 min-h-0">
-              <Virtuoso
-                {...reveal.listProps.conversations}
-                data={conversationRows}
-                overscan={200}
-                totalListHeightChanged={height => { if (height > 0) reveal.listMeasured('conversations') }}
-                style={{ height: '100%' }}
-                // Virtuoso's scroller only sets overflow-y, which leaves overflow-x
-                // resolving to `auto` — a stray pixel of row width then shows a
-                // horizontal scrollbar under a list that never scrolls sideways.
-                className="overflow-x-hidden"
-                components={listComponents}
-                itemContent={(_, row) => renderListRow(row)}
-              />
-            </div>
-          )}
-        </div>
-      )}
+      {/* The rest scrolls as one. Headings are siblings of the rows rather than wrapping them, so each
+          can stay on top while its rows go by, and those further down can wait stacked at the bottom. */}
+      <div ref={reveal.scrollerRef} data-fill-pane="" className={cn('flex-1 min-h-[68px] overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]', pinnedRows.length > 0 && 'border-t border-border-faint')}>
+        {([
+          { section: 'teams', rows: teamRows, open: teamsOpen, label: t('Teams'), attention: teamsAttention, hint: t('Conversations with your teams in this workspace') },
+          { section: 'digital-humans', rows: digitalHumanRows, open: digitalHumansOpen, label: t('Digital Humans'), attention: digitalHumanAttention, hint: t('Conversations with digital humans available in this workspace') },
+          { section: 'conversations', rows: conversationRows, open: conversationsOpen, label: t('Conversations'), attention: conversationsAttention, hint: t('Your direct conversations with Halo') },
+        ] satisfies Array<{ section: ConversationSection; rows: ConversationRow[]; open: boolean; label: string; attention?: TaskStatus; hint?: string }>)
+          .filter(({ rows }) => rows.length > 0)
+          .flatMap(({ section, rows, open, label, attention, hint }, index, all) => [
+            <div key={`anchor:${section}`} aria-hidden="true" ref={el => { if (el) sectionAnchors.current.set(section, el); else sectionAnchors.current.delete(section) }} />,
+            <div key={`heading:${section}`}
+              // Centred: stacked on top or waiting at the bottom, each heading sits between dividers.
+              className={cn('group/section sticky z-10 flex flex-col justify-center bg-background px-2', index > 0 && 'border-t border-border-faint')}
+              style={{ top: index * STICKY_HEADING_PX, bottom: (all.length - 1 - index) * STICKY_HEADING_PX, height: STICKY_HEADING_PX }}>
+              <SectionHeaderButton section={section} label={label} hint={hint} collapsed={!open} attention={attention} onToggle={toggleSection}
+                docked={docked.has(section)} count={sectionCount[section]} onJump={jumpToSection} className="pb-0" />
+            </div>,
+            ...(open ? rows.map(row => <div key={row.key} data-row-key={row.key} className="flow-root px-2 pb-0.5">{renderListRow(row)}</div>) : []),
+          ])}
+        {/* Room after the last row as a spacer, not padding: a sticky heading stops at the
+            padding's edge, so the headings waiting at the bottom would let rows show beneath them. */}
+        <div aria-hidden="true" className="h-3" />
+      </div>
       </div>
 
       {/* Drag handle - on right side */}

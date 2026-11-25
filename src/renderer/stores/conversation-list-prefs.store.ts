@@ -1,24 +1,29 @@
 /**
- * Conversation list view preferences — which sections and digital-human
- * groups are open (per space), how tall the resizable panes are, and whether
- * the whole list is folded to its icon strip. Pure presentation, so
+ * Conversation list view preferences — which sections and groups are open
+ * (per space), how far each list has been opened with "More" (per space), how
+ * tall the pinned pane is, and whether the whole list is folded to its icon strip. Pure presentation, so
  * client-local (localStorage) like the other view-prefs stores.
  */
 
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
-export type ConversationSection = 'pinned' | 'digital-humans' | 'conversations'
+export type ConversationSection = 'pinned' | 'teams' | 'digital-humans' | 'conversations'
 
-/** Panes whose height the user can drag; the conversations pane takes what is left. */
-export type ResizablePane = Exclude<ConversationSection, 'conversations'>
+/** Panes whose height the user can drag: pinned, which stays above the scrolling list. */
+export type ResizablePane = 'pinned'
 
 /** Whether the content canvas is open beside the chat; the list keeps a fold choice for each. */
 export type ConversationListLayout = 'with-canvas' | 'without-canvas'
 
-/** Digital humans start folded: most people talk to Halo itself far more often. */
+/**
+ * Teams start open: they come to the person with questions, which a folded
+ * section would hide. Digital humans start folded: most people talk to Halo
+ * itself far more often.
+ */
 const DEFAULT_SECTION_OPEN: Record<ConversationSection, boolean> = {
   pinned: true,
+  teams: true,
   'digital-humans': false,
   conversations: true,
 }
@@ -47,10 +52,17 @@ interface ConversationListPrefsState {
   /** spaceId -> section -> the user's open/closed choice; absent uses the default. */
   sectionOpen: Record<string, Partial<Record<ConversationSection, boolean>>>
   /**
-   * spaceId -> appId -> the user's explicit open/closed choice for that
-   * digital human's group. Absent means the list decides; what it opens on its own is not stored.
+   * spaceId -> group key (a digital human's appId, or `team:<id>`) -> the
+   * user's explicit open/closed choice. Absent means the list decides; what it
+   * opens on its own is not stored.
    */
   appGroupOpen: Record<string, Record<string, boolean>>
+  /**
+   * spaceId -> list key (a section, or a group) -> how many entries "More" has
+   * opened it to. Absent shows the first few. Kept, so a person who reads past
+   * them does not have to ask again every time.
+   */
+  shown: Record<string, Record<string, number>>
   /** Heights the user dragged panes to; absent keeps each pane's default. */
   paneHeights: Partial<Record<ResizablePane, number>>
   /** layout -> whether the user left the list folded; absent uses the default. */
@@ -58,6 +70,8 @@ interface ConversationListPrefsState {
 
   setSectionOpen: (spaceId: string, section: ConversationSection, open: boolean) => void
   setAppGroupOpen: (spaceId: string, appId: string, open: boolean) => void
+  /** `undefined` goes back to the first few. */
+  setShown: (spaceId: string, listKey: string, count: number | undefined) => void
   setPaneHeight: (pane: ResizablePane, height: number | undefined) => void
   setListFolded: (layout: ConversationListLayout, folded: boolean) => void
   /** Drop a deleted or forgotten space's choices. */
@@ -69,6 +83,7 @@ export const useConversationListPrefs = create<ConversationListPrefsState>()(
     (set) => ({
       sectionOpen: {},
       appGroupOpen: {},
+      shown: {},
       paneHeights: {},
       listFolded: {},
 
@@ -84,6 +99,16 @@ export const useConversationListPrefs = create<ConversationListPrefsState>()(
           const current = state.appGroupOpen[spaceId] ?? {}
           if (current[appId] === open) return state
           return { appGroupOpen: { ...state.appGroupOpen, [spaceId]: { ...current, [appId]: open } } }
+        }),
+
+      setShown: (spaceId, listKey, count) =>
+        set((state) => {
+          const current = state.shown[spaceId] ?? {}
+          if (current[listKey] === count) return state
+          const next = { ...current }
+          if (count === undefined) delete next[listKey]
+          else next[listKey] = count
+          return { shown: { ...state.shown, [spaceId]: next } }
         }),
 
       setPaneHeight: (pane, height) =>
@@ -102,10 +127,11 @@ export const useConversationListPrefs = create<ConversationListPrefsState>()(
 
       forgetSpace: (spaceId) =>
         set((state) => {
-          if (!(spaceId in state.sectionOpen) && !(spaceId in state.appGroupOpen)) return state
+          if (!(spaceId in state.sectionOpen) && !(spaceId in state.appGroupOpen) && !(spaceId in state.shown)) return state
           const { [spaceId]: _sections, ...sectionOpen } = state.sectionOpen
           const { [spaceId]: _groups, ...appGroupOpen } = state.appGroupOpen
-          return { sectionOpen, appGroupOpen }
+          const { [spaceId]: _shown, ...shown } = state.shown
+          return { sectionOpen, appGroupOpen, shown }
         }),
     }),
     { name: 'halo-conversation-list-prefs' }

@@ -30,6 +30,7 @@ import { useTeamStore } from '../../stores/team.store'
 import { useAppStore } from '../../stores/app.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { openWorkNotification } from '../../utils/people-navigation'
+import { openTeamTask } from '../../utils/team-conversation-navigation'
 import { navigateToAppChat, navigateToConversation } from '../../utils/conversation-navigation'
 import { AutomationAvatar } from '../apps/AutomationAvatar'
 import { markEntry, trackHome, trackNavigate } from '../../services/home-telemetry'
@@ -95,9 +96,14 @@ function trackTaskNavigate(to: 'space' | 'apps') {
   markEntry('home_task')
 }
 
-/** Open a team's workbench, which lives on the Apps page under the Teams tab. */
-function navigateToTeam(teamId: string) {
-  useTeamStore.getState().selectTeam(teamId)
+/**
+ * A team task needing the person: its homepage conversation, at its waiting
+ * decision. The team page stays the way in when that cannot be shown.
+ */
+async function navigateToTeamTask(item: TaskItem) {
+  if (!item.teamId) return
+  if (item.epochId && await openTeamTask({ teamId: item.teamId, epochId: item.epochId, spaceId: item.spaceId, label: item.title })) return
+  useTeamStore.getState().selectTeam(item.teamId)
   useAppsPageStore.getState().setCurrentTab('team')
   useAppStore.getState().navigate('apps')
 }
@@ -141,7 +147,7 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
   // A digital human on screen takes the place of the regular conversation.
   const currentConversationId = useChatStore(selectActiveConversationId)
   const selectedAppId = useAppsPageStore(state => state.selectedAppId)
-  const selectedTeamId = useTeamStore(state => state.currentTeamId)
+  const selectedTeamChat = useChatStore(state => state.spaceStates.get(state.currentSpaceId ?? '')?.selectedTeamChat)
   const appView = useAppStore(state => state.view)
 
   // Drives the elapsed-time text for running items. Only ticks while at
@@ -168,8 +174,8 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
       trackTaskNavigate('space')
       navigateToConversation(item.spaceId!, item.conversationId)
     } else if (item.source === 'team' && item.teamId) {
-      trackTaskNavigate('apps')
-      navigateToTeam(item.teamId)
+      trackTaskNavigate('space')
+      void navigateToTeamTask(item)
     } else {
       if (item.appId) trackTaskNavigate('apps')
       navigateToAutomation(item)
@@ -256,7 +262,9 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
     // conversation and a digital human could show as selected at once.
     const isSelected = isConversation
       ? appView === 'space' && item.spaceId === currentSpaceId && item.conversationId === currentConversationId
-      : appView === 'apps' && (isTeam ? item.teamId === selectedTeamId : item.appId === selectedAppId)
+      : isTeam
+        ? appView === 'space' && selectedTeamChat?.teamId === item.teamId && selectedTeamChat?.epochId === item.epochId
+        : appView === 'apps' && item.appId === selectedAppId
 
     return (
       <div

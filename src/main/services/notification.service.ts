@@ -154,8 +154,10 @@ export function notifyAppEvent(title: string, body: string, options?: AppNotific
   }
   const toast = {
     // One in-app toast per digital human: its newest replaces the one before,
-    // so a person running every few minutes does not pile them up.
-    ...(options?.appId ? { id: `app-notification:${options.appId}` } : {}),
+    // so a person running every few minutes does not pile them up. In a team
+    // it is one per task instead, so a lead asking in two tasks keeps both.
+    ...(options?.teamId && options.epochId ? { id: `team-task-notification:${options.teamId}:${options.epochId}` }
+      : options?.appId ? { id: `app-notification:${options.appId}` } : {}),
     title, body, ...target,
   }
 
@@ -184,6 +186,8 @@ export function notifyAppEvent(title: string, body: string, options?: AppNotific
         notification.on('click', () => {
           if (mainWindow && !mainWindow.isDestroyed()) {
             if (mainWindow.isMinimized()) mainWindow.restore()
+            // Closing the window only hides it to the tray; focus alone leaves it hidden.
+            if (!mainWindow.isVisible()) mainWindow.show()
             mainWindow.focus()
 
             // Deep navigation: tell the renderer to open this App's Activity Thread

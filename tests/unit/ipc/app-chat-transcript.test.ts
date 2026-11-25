@@ -27,6 +27,8 @@ vi.mock('../../../src/main/apps/runtime', async () => ({
   EscalationAnswerValidationError: (await import('../../../src/main/apps/runtime/errors')).EscalationAnswerValidationError,
   getAppRuntime: () => ({ respondToEscalation: env.respondToEscalation }),
   injectIntoAppChatWhenLive: env.injectIntoAppChatWhenLive,
+  appChatAdditionResult: (outcome: string) => outcome === 'stopped' ? { delivered: false, stopped: true }
+    : outcome === 'after_turn' ? { delivered: false, afterTurn: true, servesOther: 'colleague' } : { delivered: outcome === 'delivered' },
   getAppChatConversationId: (appId: string) => `app-chat:${appId}`,
   buildImSessionKey: (appId: string, channel: string, chatType: string, chatId: string) => `app-chat:${appId}:${channel}:${chatType}:${chatId}`,
   loadChatEngineMetadata: () => env.engineMetadata,

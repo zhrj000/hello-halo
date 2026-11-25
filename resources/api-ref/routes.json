@@ -934,6 +934,10 @@
   },
   {
     "method": "POST",
+    "path": "/api/apps/:appId/chat/withdraw"
+  },
+  {
+    "method": "POST",
     "path": "/api/apps/:appId/chat/stop",
     "group": "digital-human"
   },

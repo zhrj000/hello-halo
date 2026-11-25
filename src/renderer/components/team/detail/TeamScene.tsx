@@ -12,7 +12,7 @@ import type { TaskActivityData } from '../workbench/useTaskActivity'
 import { blinkDelay, capStage, crewState, isExchange, needsAttention, orderCrew, partnersOf, talkLinks, type CrewEntry, type CrewState } from './crew'
 import { crewStateText, useRecentTalk } from './crew-ui'
 import { LABEL_LINE, layoutScene, MORE_RADIUS, SCENE_RADIUS } from './scene-layout'
-import { MemberConversationsLink } from './task-ui'
+import { CollaborationRecordLink } from './task-ui'
 
 const STAGE_CAP = 6
 const PILE_CAP = 12
@@ -102,7 +102,7 @@ export function TeamScene({ detail, epochId, progress, ended = false, data, onOp
   }
 
   const exchanges = useMemo(() => data.activities.filter(isExchange), [data.activities])
-  // Only live talk belongs on the scene; older exchanges and failures stay behind "All exchanges".
+  // Only live talk belongs on the scene; older exchanges and failures stay in the collaboration record.
   const latest = count('working') ? recent
     .filter(activity => activity.epochId === epochId)
     .map(activity => ({ activity, at: taskTime(activity.createdAt) ?? 0 }))
@@ -157,7 +157,7 @@ export function TeamScene({ detail, epochId, progress, ended = false, data, onOp
         <span className="text-foreground">{nameOf(latest.activity.actorAppId)}</span> → <span className="text-foreground">{nameOf(latest.activity.targetAppId!)}</span>
         {subject && <>: {subject}</>}
       </button>}
-      <MemberConversationsLink count={exchanges.length} onOpen={onOpenAll} className="justify-self-start" />
+      <CollaborationRecordLink count={exchanges.length} onOpen={onOpenAll} className="justify-self-start" />
     </div>
   </section>
 }

@@ -11,7 +11,6 @@ paths:
   - src/main/apps/runtime/federation/**
   - src/renderer/components/team/TeamJoinDialog.tsx
   - src/renderer/components/team/TeamInviteDialog.tsx
-  - src/renderer/components/team/MemberPresenceChip.tsx
 dependsOn:
   - teams
   - permissions

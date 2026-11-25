@@ -290,13 +290,15 @@ export function createReportToolServer(
       // person left the question answered in two places at once, while the member
       // itself had already stopped waiting for either answer.
       const team = runContext.teamContext
+      // Which team, task and member this is, for the record and for the notification.
+      const described = team ? getActiveTeamRuntime()?.describeTaskSource?.(team.teamId, team.epochId, runContext.appId) ?? null : null
       if (team) {
         content.teamContext = { teamId: team.teamId, epochId: team.epochId, ...(team.taskId ? { taskId: team.taskId } : {}) }
-        const snapshot = getActiveTeamRuntime()?.describeTaskSource?.(team.teamId, team.epochId)
+        const { memberName: _memberName, ...snapshot } = described ?? {}
         content.source = {
           kind: 'team', appId: runContext.appId, teamId: team.teamId, epochId: team.epochId,
           memberId: runContext.appId, taskId: team.taskId, sessionKey: runContext.sessionKey,
-          ...(snapshot ?? {}),
+          ...snapshot,
         }
       }
       if (team && safeType === 'escalation') {
@@ -382,12 +384,20 @@ export function createReportToolServer(
       console.log(`[Runtime][${runTag}] Activity entry created: type=${safeType}, app=${runContext.appId}, entry=${entryId}`)
 
       // Send system desktop notification based on notification level.
+      // A team member waiting on a person always reaches them: the member's own
+      // level is for its solo runs, and a teammate set to quiet would otherwise
+      // leave the whole team stuck without a word.
       const level = runContext.notificationLevel ?? 'important'
       const shouldNotify =
+        (!!team && safeType === 'escalation') ||
         level === 'all' ||
         (level === 'important' && (safeType === 'escalation' || safeType === 'milestone' || safeType === 'output'))
       if (shouldNotify) {
-        notifyAppEvent(runContext.appName, input.message, {
+        // In a team the title names the team and the task, the body who says it.
+        const teamTitle = described ? [described.teamName, described.label].filter(Boolean).join(' · ') : null
+        const title = teamTitle ?? runContext.appName
+        const body = teamTitle ? `${described?.memberName || runContext.appName}: ${input.message}` : input.message
+        notifyAppEvent(title, body, {
           appId: runContext.appId,
           entryId: entry.id,
           runId: team ? undefined : entry.runId,

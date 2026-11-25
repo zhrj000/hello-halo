@@ -16,7 +16,7 @@ vi.mock('../../../src/renderer/stores/team-chat-pins.store', () => ({
 vi.mock('../../../src/renderer/stores/team-chat-hidden.store', () => ({
   useTeamChatHiddenStore: Object.assign((select: any) => select({ hidden: env.hidden, reconcile: env.reconcile }), { getState: () => ({ hidden: env.hidden }) }),
 }))
-import { buildTeamRows, teamAvatarFaces, useTeamConversationRows, type NativeTeamTask } from '../../../src/renderer/hooks/useTeamConversationRows'
+import { buildTeamRows, teamAvatarFaces, teamGroupAttention, teamsWaitingOnMe, useTeamConversationRows, type NativeTeamTask } from '../../../src/renderer/hooks/useTeamConversationRows'
 
 class HookRunner<T> {
   slots: any[] = []; index = 0; dirty = true; effects: (() => void)[] = []; result!: T
@@ -72,6 +72,30 @@ describe('team conversation metadata', () => {
     expect(env.api.teamList).toHaveBeenCalledTimes(2)
     expect(runner.result.teams[0].roster).toEqual(updated)
     expect(env.api.teamGetDetail).not.toHaveBeenCalled()
+  })
+  it('keeps a team in its place when a pulse carries it, so groups never trade places under the pointer', async () => {
+    env.api.teamList.mockResolvedValue({ success: true, data: [{ id: 'a', name: 'Alpha' }, { id: 'b', name: 'Beta' }, { id: 'c', name: 'Gamma' }] })
+    const runner = mount(() => useTeamConversationRows('s')); await runner.settle()
+    for (const id of ['a', 'b', 'a']) env.listeners.forEach(listener => listener({ teamId: id, team: { id, name: id === 'a' ? 'Alpha 2' : 'Beta', owningSpaceId: 's' } as any, changed: ['status', 'work'], activeEpochIds: [] }))
+    await runner.settle()
+    expect(runner.result.teams.map(team => [team.id, team.name])).toEqual([['a', 'Alpha 2'], ['b', 'Beta'], ['c', 'Gamma']])
+    env.listeners.forEach(listener => listener({ teamId: 'new', team: { id: 'new', name: 'New', owningSpaceId: 's' } as any }))
+    await runner.settle()
+    expect(runner.result.teams.map(team => team.id)).toEqual(['a', 'b', 'c', 'new'])
+  })
+  it('reads the summaries again for a joined team it does not list yet, without adding it on its own', async () => {
+    const runner = mount(() => useTeamConversationRows('s')); await runner.settle()
+    env.api.teamList.mockResolvedValue({ success: true, data: [{ id: 'joined', name: 'Joined' }] })
+    env.listeners.forEach(listener => listener({ teamId: 'joined', team: { id: 'joined', name: 'Joined', owningSpaceId: 'office', hostNodeId: 'host' } as any }))
+    await runner.settle()
+    expect(runner.result.teams).toEqual([])
+    await vi.advanceTimersByTimeAsync(250); await runner.settle()
+    expect(runner.result.teams.map(team => team.id)).toEqual(['joined'])
+    // Another space's own team is still none of this list's business.
+    env.api.teamList.mockClear()
+    env.listeners.forEach(listener => listener({ teamId: 'elsewhere', team: { id: 'elsewhere', name: 'Elsewhere', owningSpaceId: 'other' } as any }))
+    await vi.advanceTimersByTimeAsync(250); await runner.settle()
+    expect(env.api.teamList).not.toHaveBeenCalled()
   })
   it('resolves persisted pins beyond the first page in batches of 100 and keeps them on refresh', async () => {
     const pins = Array.from({ length: 205 }, (_, i) => task(`old-${i}`))
@@ -298,6 +322,20 @@ describe('buildTeamRows', () => {
     expect(result.rows.at(-1)).toMatchObject({ type: 'team-hidden', teamId: 't', count: 1 })
     expect(buildTeamRows([task('a')], [{ id: 't', name: 'Crew' }], [], () => true, { 'team:t:a': { waiting: false } }).rows.map(row => row.key)).toEqual(['team:t', 'team-hidden:t'])
     expect(buildTeamRows([task('a')], [{ id: 't', name: 'Crew' }], [], () => false, { 'team:t:a': { waiting: false } }).rows.map(row => row.key)).toEqual(['team:t'])
+  })
+  it('marks a group header with its most urgent listed task, leaving out pinned and removed ones', () => {
+    const teams = [{ id: 't', name: 'Crew' }]
+    const header = (tasks: NativeTeamTask[], pins: string[] = [], hidden = {}) => buildTeamRows(tasks, teams, pins, () => false, hidden).rows[0]
+    expect(header([task('a'), task('b')])).not.toHaveProperty('attention')
+    expect(header([{ ...task('a'), active: true }, task('b')])).toMatchObject({ attention: 'generating' })
+    expect(header([{ ...task('a'), active: true }, { ...task('b'), waitingForMe: true }])).toMatchObject({ attention: 'waiting' })
+    expect(header([{ ...task('a'), waitingForMe: true }], ['team:t:a'])).not.toHaveProperty('attention')
+    expect(header([{ ...task('a'), waitingForMe: true }], [], { 'team:t:a': { waiting: true } })).not.toHaveProperty('attention')
+    expect(teamGroupAttention([])).toBeUndefined()
+  })
+  it('names the teams to open because a listed task waits on the person', () => {
+    const tasks = [{ ...task('a', 'x'), waitingForMe: true }, { ...task('b', 'x'), waitingForMe: true }, { ...task('c', 'y'), waitingForMe: true }, { ...task('d', 'z'), waitingForMe: true }, task('e', 'w')]
+    expect(teamsWaitingOnMe(tasks, ['team:y:c'], { 'team:z:d': { waiting: true } })).toEqual(['x'])
   })
   it('hands the visible tasks waiting state to the hidden store', async () => {
     env.api.teamListNativeTasks.mockResolvedValue(page([{ ...task('a'), waitingForMe: true }, task('b')]))

@@ -70,7 +70,9 @@ function makeAppManager() {
   apps.set('existing-1', { id: 'existing-1', spaceId: SPACE_A, spec: { name: 'Researcher' } })
   apps.set('existing-2', { id: 'existing-2', spaceId: SPACE_A, spec: { name: 'Tester' } })
 
-  return { apps, install, getApp, uninstall, deleteApp }
+  const listApps = vi.fn(({ spaceId }: { spaceId?: string } = {}) => [...apps.values()].filter(app => spaceId === undefined || app.spaceId === spaceId))
+
+  return { apps, install, getApp, uninstall, deleteApp, listApps }
 }
 
 // ============================================

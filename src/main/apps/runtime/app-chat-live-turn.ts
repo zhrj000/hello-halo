@@ -23,6 +23,7 @@ import type { TranscriptMessage, TranscriptProvenance } from '../../../shared/ty
 import type { ContentReference } from '../../../shared/types/content-reference'
 import type { ImageAttachment } from '../../../shared/types/image-attachment'
 import type { ImPermissionContext } from './im-permission-registry'
+import type { AppChatInjectResult } from '../../../shared/apps/app-types'
 import type { TeamRequestOrigin, TeamTriggerContext } from '../../../shared/apps/team-types'
 import { createTurnGate } from '../../platform/turn-gate'
 import { pendingWorkspaceChange } from './workspace-admission'
@@ -432,9 +433,36 @@ export function injectIntoAppChat(
  * turn of its own because nothing is in flight, or held back because the turn
  * it was meant for was stopped — the person stopped it, so the text goes back
  * to them rather than starting work they just halted. A refusal while work is
- * still live also returns the addition to its author, never to a new turn.
+ * still live also returns the addition to its author, never to a new turn —
+ * except `after_turn`: the running turn serves someone else (a colleague's or a
+ * guest's request), so the owner's words never join it by design. They are not
+ * an addition to that work but the owner's own next message, which the caller
+ * sends to wait behind it.
  */
-export type AppChatAdditionOutcome = 'delivered' | 'no_turn' | 'stopped' | 'refused'
+export type AppChatAdditionOutcome = 'delivered' | 'no_turn' | 'stopped' | 'refused' | 'after_turn'
+
+/** What an addition's caller is told; `afterTurn` asks it to send the text as the owner's next message. */
+export type AppChatAdditionResult = AppChatInjectResult
+
+export function appChatAdditionResult(outcome: Exclude<AppChatAdditionOutcome, 'refused'>, conversationId: string): AppChatAdditionResult {
+  if (outcome === 'stopped') return { delivered: false, stopped: true }
+  if (outcome === 'after_turn') {
+    const servesOther = appChatTurnServesOther(conversationId)
+    return { delivered: false, afterTurn: true, ...(servesOther ? { servesOther } : {}) }
+  }
+  return { delivered: outcome === 'delivered' }
+}
+
+/**
+ * Whose request the running turn serves, when it is not the owner's: the
+ * owner's additions wait for it to end rather than join it. Undefined while the
+ * owner's own (or nothing) runs, and while the turn's identity is unknown.
+ */
+export function appChatTurnServesOther(conversationId: string): 'colleague' | 'guest' | undefined {
+  const identity = getAppChatTurnIdentity(conversationId)
+  if (!identity || identity === 'owner') return undefined
+  return identity === 'colleague' ? 'colleague' : 'guest'
+}
 
 const ownerAdditions = createTurnGate<{ text: string; provenance?: TranscriptProvenance; references?: ContentReference[]; images?: ImageAttachment[] }>({
   isBusy: isAppChatConversationGenerating,
@@ -483,7 +511,7 @@ export async function injectIntoAppChatWhenLive(
       return 'stopped'
     }
   }
-  return ownerAdditions.tryDeliverLive(conversationId, { text, provenance, references, images })
-    ? 'delivered'
-    : isAppChatConversationGenerating(conversationId) ? 'refused' : 'no_turn'
+  if (ownerAdditions.tryDeliverLive(conversationId, { text, provenance, references, images })) return 'delivered'
+  if (!isAppChatConversationGenerating(conversationId)) return 'no_turn'
+  return appChatTurnServesOther(conversationId) ? 'after_turn' : 'refused'
 }

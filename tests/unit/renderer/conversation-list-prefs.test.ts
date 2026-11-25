@@ -25,6 +25,26 @@ async function loadPrefs(storage: ReturnType<typeof memoryStorage>) {
 
 afterEach(() => { vi.unstubAllGlobals() })
 
+describe('how far a list was opened', () => {
+  it('is kept per space and list, goes back to the first few, and survives a restart', async () => {
+    const storage = memoryStorage()
+    const before = await loadPrefs(storage)
+    before.useConversationListPrefs.getState().setShown('s1', 'conversations', 25)
+    before.useConversationListPrefs.getState().setShown('s1', 'team:crew', 15)
+    before.useConversationListPrefs.getState().setShown('s1', 'team:crew', undefined)
+    const after = await loadPrefs(storage)
+    expect(after.useConversationListPrefs.getState().shown).toEqual({ s1: { conversations: 25 } })
+    after.useConversationListPrefs.getState().forgetSpace('s1')
+    expect(after.useConversationListPrefs.getState().shown).toEqual({})
+  })
+
+  it('opens the teams section by default and keeps digital humans folded', async () => {
+    const { isSectionOpen } = await loadPrefs(memoryStorage())
+    expect(isSectionOpen(undefined, 'teams')).toBe(true)
+    expect(isSectionOpen(undefined, 'digital-humans')).toBe(false)
+  })
+})
+
 describe('the list fold choice', () => {
   it('starts folded beside open files and open without them', async () => {
     const { useConversationListPrefs, isListFolded } = await loadPrefs(memoryStorage())
@@ -68,6 +88,7 @@ describe('the list fold choice', () => {
     expect(state.sectionOpen).toEqual(saved.state.sectionOpen)
     expect(state.appGroupOpen).toEqual(saved.state.appGroupOpen)
     expect(state.paneHeights).toEqual(saved.state.paneHeights)
+    expect(state.shown).toEqual({})
     expect(isListFolded(state.listFolded, 'with-canvas')).toBe(true)
     expect(isListFolded(state.listFolded, 'without-canvas')).toBe(false)
   })

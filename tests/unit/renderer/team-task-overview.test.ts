@@ -13,6 +13,7 @@ vi.mock('../../../src/renderer/components/apps/EscalationCard', () => ({ Escalat
 vi.mock('../../../src/renderer/components/chat/MarkdownRenderer', () => ({ MarkdownRenderer: ({ content }: { content: string }) => content }))
 vi.mock('../../../src/renderer/utils/people-navigation', () => ({ openPersonModelSettings: vi.fn() }))
 import { TeamTaskOverview } from '../../../src/renderer/components/team/TeamTaskOverview'
+import { ReplyInConversationContext } from '../../../src/renderer/components/team/team-page-host'
 import type { TaskOverview } from '../../../src/renderer/components/team/detail/TaskBody'
 import type { TaskOutput } from '../../../src/renderer/components/team/workbench/task-record'
 import type { TaskActivityData } from '../../../src/renderer/components/team/workbench/useTaskActivity'
@@ -20,9 +21,9 @@ import type { TaskActivityData } from '../../../src/renderer/components/team/wor
 const subtask = (id: string, status: BlackboardTask['status']) => ({ id, title: `task ${id}`, status, assigneeAppId: 'a', createdByAppId: 'lead', createdAt: 1, updatedAt: 2 } as BlackboardTask)
 const output = (name: string): TaskOutput => ({ entry: { name, path: `/out/${name}`, ref: name, epochId: 'e' }, at: null })
 
-function render({ tasks, outputs = [], status = 'ready', finished = true, task = {}, roster = [], open = {}, finals = new Map(), decisions = [], onTalkTo = vi.fn() }: {
+function render({ tasks, outputs = [], status = 'ready', finished = true, task = {}, roster = [], open = {}, finals = new Map(), decisions = [], onTalkTo = vi.fn(), replyHere = false }: {
   tasks: BlackboardTask[]; outputs?: TaskOutput[]; status?: 'loading' | 'ready' | 'failed'; finished?: boolean; task?: Partial<TeamConversation>; roster?: unknown[]; open?: Record<string, boolean>
-  finals?: Map<string, string>; decisions?: TeamPendingEscalation[]; onTalkTo?: (appId: string) => void
+  finals?: Map<string, string>; decisions?: TeamPendingEscalation[]; onTalkTo?: (appId: string) => void; replyHere?: boolean
 }) {
   const data = {
     tasks, activities: [], pending: decisions, participants: [], busy: [], loaded: true, failed: false, retry: vi.fn(),
@@ -35,12 +36,12 @@ function render({ tasks, outputs = [], status = 'ready', finished = true, task =
     lastActs: new Map(),
     outputs,
   }
-  return renderToStaticMarkup(createElement(TeamTaskOverview, {
+  return renderToStaticMarkup(createElement(ReplyInConversationContext.Provider, { value: !replyHere }, createElement(TeamTaskOverview, {
     detail: { team: { id: 't', name: 'Team', leadAppId: 'lead' }, roster } as unknown as TeamDetail,
     task: { epochId: 'e', label: 'Work', startedAt: 1, kind: 'run', ...task } as TeamConversation,
     taskSpaceId: 's', data, overview, held: { decisions, answeringId: null, setAnswering: vi.fn() }, open, setOpen: vi.fn(),
     onTalkTo, onOpenExchange: vi.fn(), onGo: vi.fn(),
-  }))
+  })))
 }
 
 describe('team task overview', () => {
@@ -55,16 +56,20 @@ describe('team task overview', () => {
       expect(html.indexOf('aria-label="Outputs"')).toBeGreaterThan(html.indexOf('aria-label="Subtasks"'))
     }
   })
-  it('answers a waiting question in place instead of leaving for the chat', () => {
+  it('sends a waiting question to its conversation, and answers it in place where leaving is turned off', () => {
     const decision = { entryId: 'q1', appId: 'a', memberName: 'Ann', question: 'Which region?', epochId: 'e', entry: { ts: 1 } } as unknown as TeamPendingEscalation
     const html = render({ tasks: [subtask('1', 'in_progress')], finished: false, decisions: [decision] })
     expect(html).toContain('Which region?')
-    expect(html).toContain('>Reply</button>')
-    expect(html).not.toContain('Go to reply')
+    expect(html).toContain('Reply in conversation')
+    expect(html).not.toContain('>Reply</button>')
+    const inPlace = render({ tasks: [subtask('1', 'in_progress')], finished: false, decisions: [decision], replyHere: true })
+    expect(inPlace).toContain('>Reply</button>')
+    expect(inPlace).not.toContain('Reply in conversation')
   })
-  it('shows who is on the work as the team scene, for team work only', () => {
+  it('keeps the team scene on every team task, worked on or not, but not on an IM chat', () => {
     expect(render({ tasks: [subtask('1', 'in_progress')], finished: false, roster: [{ appId: 'a', memberName: 'Ann' }] })).toContain('aria-label="Team scene"')
-    expect(render({ tasks: [], task: { kind: undefined } })).not.toContain('aria-label="Team scene"')
+    expect(render({ tasks: [], task: { kind: 'native' } })).toContain('aria-label="Team scene"')
+    expect(render({ tasks: [], task: { kind: 'im' } })).not.toContain('aria-label="Team scene"')
   })
   it('drops the brief when a finished task has nothing beyond its status line', () => {
     const html = render({ tasks: [subtask('1', 'done'), subtask('2', 'done')] })

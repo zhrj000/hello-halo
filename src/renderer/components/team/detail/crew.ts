@@ -1,7 +1,6 @@
 import type { RosterMember, TeamActivity, TeamConversation, TeamDetail } from '../../../../shared/apps/team-types'
 import { isFailedActivity } from '../../../../shared/apps/team-failures'
 import { taskTime } from '../workbench/time'
-import { taskDecisions } from './status'
 
 /**
  * How a member on a task stands: at work, waiting on its owner, stopped by a failure,
@@ -24,32 +23,10 @@ export interface CrewLink {
 /** Members count as talking while their latest message to each other is this recent. */
 export const TALK_WINDOW = 2 * 60_000
 
-/** Who is on a listed task right now, read from what the list already holds; finished work has no one on it. */
-export function taskCrew(detail: TeamDetail, task: TeamConversation): CrewEntry[] {
-  if (task.completed || task.finishedAt !== undefined) return []
-  const waiting = new Set([...(task.waitingMemberAppIds ?? []), ...taskDecisions(detail, task.epochId).map(item => item.appId)])
-  const failedAppId = task.failure?.appId
-  const crew: CrewEntry[] = []
-  for (const member of detail.roster) {
-    const busy = !!member.busy?.some(row => row.epochId === task.epochId)
-    const failed = busy ? member.status === 'error' : member.appId === failedAppId
-    if (!busy && !failed && !waiting.has(member.appId)) continue
-    crew.push({ appId: member.appId, state: crewState(member, waiting.has(member.appId), failed) })
-  }
-  return crew
-}
-
 /** The teammate a conversation was opened with directly instead of through the lead; null otherwise. */
 export function addressedMember(detail: TeamDetail, task: TeamConversation): string | null {
   if (task.kind === 'run' || task.kind === 'im' || !task.memberAppId || task.memberAppId === detail.team.leadAppId) return null
   return task.memberAppId
-}
-
-/** Members who took part in a listed task but are not on it now, in roster order. */
-export function pastCrew(detail: TeamDetail, task: TeamConversation, crew: readonly CrewEntry[]): string[] {
-  const on = new Set(crew.map(entry => entry.appId))
-  const roster = new Set(detail.roster.map(member => member.appId))
-  return (task.participantAppIds ?? []).filter(appId => roster.has(appId) && !on.has(appId))
 }
 
 export function crewState(member: RosterMember | undefined, waiting: boolean, failed: boolean): CrewState {
@@ -130,16 +107,6 @@ export function orderCrew(crew: readonly CrewEntry[], links: readonly CrewLink[]
 
 export function linked(links: readonly CrewLink[], a: string, b: string): boolean {
   return links.some(link => (link.a === a && link.b === b) || (link.a === b && link.b === a))
-}
-
-/** Neighbours in a row who talk to each other share a group, so a chain like A–Lead–B stays together. */
-export function rowGroups(shown: readonly CrewEntry[], links: readonly CrewLink[]): CrewEntry[][] {
-  const groups: CrewEntry[][] = []
-  shown.forEach((entry, index) => {
-    if (index && linked(links, shown[index - 1].appId, entry.appId)) groups[groups.length - 1].push(entry)
-    else groups.push([entry])
-  })
-  return groups
 }
 
 /** Members who talk form one cluster, walked as a chain so each sits beside someone it talked to. */
