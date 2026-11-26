@@ -42,6 +42,7 @@ import {
   type ParsedSkill,
 } from './skill-import-utils'
 import { FileImportZone } from './FileImportZone'
+import { SpaceSearchSelect } from '../space/SpaceSearchSelect'
 import { getCapabilityDraft, saveCapabilityDraft, clearCapabilityDraft } from '../../stores/capability-drafts'
 
 // Lazy-load CodeMirrorEditor to keep initial bundle small
@@ -698,15 +699,17 @@ export function SkillInstallDialog({ onClose, initialSpaceId, initialMode, onIns
                 {allSpaces[0]?.name ?? t('No spaces available')}
               </p>
             ) : (
-              <select
+              <SpaceSearchSelect
                 value={selectedSpaceId}
-                onChange={e => setSelectedSpaceId(e.target.value)}
-                className="w-full px-3 py-2 text-sm bg-secondary border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground"
-              >
-                {allSpaces.map(s => (
-                  <option key={s.id} value={s.id}>{s.name}</option>
-                ))}
-              </select>
+                onChange={setSelectedSpaceId}
+                pinned={allSpaces
+                  .filter(s => !s.id || s.id === haloSpace?.id)
+                  .map(s => ({ id: s.id, label: s.id ? `${s.name} (${t('Default workspace')})` : s.name }))}
+                spaces={allSpaces
+                  .filter(s => s.id && s.id !== haloSpace?.id)
+                  .map(s => ({ id: s.id, label: s.name }))}
+                variant="secondary"
+              />
             )}
           </div>
 

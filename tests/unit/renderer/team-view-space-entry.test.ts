@@ -1,9 +1,8 @@
 /**
- * From the space conversation that coordinates it, a collaboration shows as
- * that conversation's single room — before and after it is kept as a team.
- * The Teams page shows a kept team as its team page, where work is watched and
- * conversations open on the homepage; only a legacy-coordinated team keeps the
- * old workbench.
+ * A temporary collaboration opened on its own shows its one task's team progress
+ * (keep-as-team included); its members are talked to in the conversation that
+ * leads it. Every other team shows its team page, wherever it is opened from;
+ * only a legacy-coordinated team, waiting to be repaired, keeps the old workbench.
  */
 
 import { describe, expect, it, vi } from 'vitest'
@@ -60,6 +59,10 @@ vi.mock('../../../src/renderer/components/team/detail/TeamDetailPage', async () 
   return { TeamDetailPage: () => createElement('section', { 'data-team-page': true }) }
 })
 vi.mock('../../../src/renderer/utils/people-navigation', () => ({ openPersonTeam: () => {} }))
+vi.mock('../../../src/renderer/components/team/TeamTaskProgress', async () => {
+  const { createElement } = await import('react')
+  return { TeamTaskProgress: (props: { epochId: string }) => createElement('section', { 'data-progress': props.epochId }) }
+})
 vi.mock('../../../src/renderer/components/team/workbench/TeamActivityDrawer', () => ({ TeamActivityDrawer: () => null }))
 vi.mock('../../../src/renderer/components/team/workbench/WorkbenchDrawer', () => ({ WorkbenchDrawer: () => null }))
 vi.mock('../../../src/renderer/components/team/workbench/useTaskBoard', () => ({ useTaskBoard: () => ({ board: view.board, activities: [], failed: false, retry: () => {} }) }))
@@ -85,22 +88,24 @@ for (let waited = 0; !render({ ephemeral: false, coordinatorConversationId: null
 }
 
 describe('team view opened from a space conversation', () => {
-  it('shows a temporary collaboration as its single room', () => {
-    const html = render({ ephemeral: true, coordinatorConversationId: 'conv' }, true)
-    expect(html).toContain('data-room="room"')
-    expect(html).not.toContain('data-task-sidebar')
-    expect(html).toContain('Keep this team')
-    expect(html).not.toContain('Team settings')
+  it('shows a temporary collaboration as its task progress, never the old room', () => {
+    for (const spaceEntry of [true, false]) {
+      for (const savedTeamId of [undefined, 'saved']) {
+        const html = render({ ephemeral: true, coordinatorConversationId: 'conv', savedTeamId }, spaceEntry)
+        expect(html).toContain('data-progress="room"')
+        expect(html).not.toContain('data-room=')
+        expect(html).not.toContain('data-team-page')
+      }
+    }
+    // On the Teams page it can go back to the list; in the canvas the tab closes instead.
+    expect(render({ ephemeral: true, coordinatorConversationId: 'conv' }, false)).toContain('Back to teams')
+    expect(render({ ephemeral: true, coordinatorConversationId: 'conv' }, true)).not.toContain('Back to teams')
   })
 
-  it('keeps showing a kept collaboration as its single room, without team settings', () => {
-    const html = render({ ephemeral: true, coordinatorConversationId: 'conv', savedTeamId: 'saved' }, true)
-    expect(html).toContain('data-room="room"')
-    expect(html).not.toContain('data-task-sidebar')
-    expect(html).not.toContain('Keep this team')
-    expect(html).toContain('Open saved team')
-    expect(html).not.toContain('Team settings')
-    expect(html).toContain('data-member-rail')
+  it('shows a kept team still bound to its conversation as its team page, from the canvas too', () => {
+    const html = render({ ephemeral: false, coordinatorConversationId: 'conv' }, true)
+    expect(html).toContain('data-team-page')
+    expect(html).not.toContain('data-room=')
   })
 
   it('shows a team that no space conversation coordinates as its team page', () => {

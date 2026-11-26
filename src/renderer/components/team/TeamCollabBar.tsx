@@ -1,10 +1,10 @@
 import { memo, useEffect, useMemo, type ReactNode } from 'react'
+import type { CollabMemberFocus } from '../../stores/collab-member-view.store'
 import type { CollabSummary, TeamConversation, TeamDetail } from '../../../shared/apps/team-types'
 import { useCollabSummary } from '../../hooks/useCollabSummary'
 import { useCanvasActions } from '../../hooks/useCanvasLifecycle'
 import { useTranslation } from '../../i18n'
 import type { RevealTarget } from '../../services/canvas-lifecycle'
-import { usePeopleViewStore } from '../../stores/people-view.store'
 import { TeamViewContext, useTeamStore, useTeamView } from '../../stores/team.store'
 import { detailForTask } from './workbench/members'
 import { TaskMemberSelector } from './workbench/TaskMemberSelector'
@@ -21,7 +21,7 @@ interface CollabWork { spaceId: string; collab: CollabSummary; teamDetail: TeamD
  * answered in the team view. It subscribes to the collaboration itself, so a busy team
  * never re-renders the chat page.
  */
-export const TeamCollabBar = memo(function TeamCollabBar({ spaceId, conversationId, onOpenMember }: { spaceId: string; conversationId?: string; onOpenMember: (appId: string) => void }) {
+export const TeamCollabBar = memo(function TeamCollabBar({ spaceId, conversationId, onOpenMember }: { spaceId: string; conversationId?: string; onOpenMember: (appId: string, focus?: CollabMemberFocus) => void }) {
   const collab = useCollabSummary(conversationId)
   return <CollabScope spaceId={spaceId} collab={collab}>
     {work => <CollabMembers {...work} onOpenMember={onOpenMember} />}
@@ -33,14 +33,17 @@ export const TeamCollabBar = memo(function TeamCollabBar({ spaceId, conversation
  * messaged; `onSelect` switches member and `onReturn` goes back to the chat, which also
  * happens once the member or the team is gone.
  */
-export function TeamCollabMemberView({ spaceId, conversationId, appId, onSelect, onReturn }: {
-  spaceId: string; conversationId: string; appId: string; onSelect: (appId: string) => void; onReturn: () => void
+export function TeamCollabMemberView({ spaceId, conversationId, appId, focus, onSelect, onReturn }: {
+  spaceId: string; conversationId: string; appId: string
+  /** A question to bring into view on arrival. */
+  focus?: CollabMemberFocus
+  onSelect: (appId: string) => void; onReturn: () => void
 }) {
   const collab = useCollabSummary(conversationId)
   useEffect(() => { if (collab === null || (collab && !collab.members.length)) onReturn() }, [collab, onReturn])
   return <div className="flex min-h-0 flex-1 flex-col">
     <CollabScope spaceId={spaceId} collab={collab}>
-      {work => <CollabMemberRoom {...work} appId={appId} onSelect={onSelect} onReturn={onReturn} />}
+      {work => <CollabMemberRoom {...work} appId={appId} focus={focus} onSelect={onSelect} onReturn={onReturn} />}
     </CollabScope>
   </div>
 }
@@ -78,8 +81,7 @@ function useOpenProgress(spaceId: string, collab: CollabSummary, task: TeamConve
   return (reveal?: RevealTarget) => void openTeamTask({ spaceId, teamId: collab.teamId, epochId: task.epochId }, t('Team progress'), reveal ? { reveal } : {})
 }
 
-function CollabMembers({ spaceId, collab, teamDetail, task, onOpenMember }: CollabWork & { onOpenMember: (appId: string) => void }) {
-  const { openTeam } = useCanvasActions()
+function CollabMembers({ spaceId, collab, teamDetail, task, onOpenMember }: CollabWork & { onOpenMember: (appId: string, focus?: CollabMemberFocus) => void }) {
   const { detail, boardState } = useCollabDetail(teamDetail, task)
   const openProgress = useOpenProgress(spaceId, collab, task)
   const pending = useMemo(() => (detail.pendingEscalations ?? []).filter(item => item.epochId === task.epochId && item.entry), [detail.pendingEscalations, task.epochId])
@@ -87,10 +89,10 @@ function CollabMembers({ spaceId, collab, teamDetail, task, onOpenMember }: Coll
   const memberIds = useMemo(() => detail.roster.map(member => member.appId), [detail.roster])
   if (!detail.roster.length) return null
 
+  // A question is answered right here, in the asking member's room, at the question.
   const openRoom = (decisionId?: string) => {
-    const decision = decisionId ? pending.find(item => item.entryId === decisionId) : undefined
-    if (decision) usePeopleViewStore.setState({ teamTarget: { teamId: collab.teamId, epochId: task.epochId, appId: decision.appId, entryId: decision.entryId, decision: true } })
-    void openTeam(collab.teamId, collab.name)
+    const decision = (decisionId ? pending.find(item => item.entryId === decisionId) : undefined) ?? pending[0]
+    if (decision) onOpenMember(decision.appId, { entryId: decision.entryId, seq: Date.now() })
   }
   const working = new Set(detail.roster.filter(member => member.busy?.some(row => row.epochId === task.epochId)).map(member => member.appId))
   return <div className="min-w-0 pt-1">
@@ -102,13 +104,14 @@ function CollabMembers({ spaceId, collab, teamDetail, task, onOpenMember }: Coll
   </div>
 }
 
-function CollabMemberRoom({ spaceId, collab, teamDetail, task, appId, onSelect, onReturn }: CollabWork & { appId: string; onSelect: (appId: string) => void; onReturn: () => void }) {
+function CollabMemberRoom({ spaceId, collab, teamDetail, task, appId, focus, onSelect, onReturn }: CollabWork & { appId: string; focus?: CollabMemberFocus; onSelect: (appId: string) => void; onReturn: () => void }) {
   const { detail, boardState } = useCollabDetail(teamDetail, task)
   const openProgress = useOpenProgress(spaceId, collab, task)
   const gone = !!boardState.board && !detail.roster.some(member => member.appId === appId)
   useEffect(() => { if (gone) onReturn() }, [gone, onReturn])
   if (!boardState.board && !boardState.failed) return null
   return <TaskRoom homepageConversation returnToMain={onReturn} detail={detail} task={task} selectedAppId={appId} boardState={boardState} tasks={[]}
+    decisionTarget={focus?.entryId} decisionSeq={focus?.seq}
     onSelectMember={member => onSelect(member.appId)} onCreated={() => {}} onTask={() => {}}
     onActivity={activityId => openProgress(activityId ? { activityId } : undefined)} onExecution={memberAppId => openProgress({ memberAppId })} />
 }

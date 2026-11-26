@@ -1,6 +1,8 @@
 import { api } from '../api'
 import i18n from '../i18n'
 import { useAppStore } from '../stores/app.store'
+import { useCollabMemberViewStore } from '../stores/collab-member-view.store'
+import { navigateToConversation } from './conversation-navigation'
 import { useChatStore, type TeamChatTarget } from '../stores/chat.store'
 import { useNotificationStore } from '../stores/notification.store'
 import { useSpaceStore } from '../stores/space.store'
@@ -73,7 +75,7 @@ export async function openTeamWork(target: TeamWorkTarget, loaded?: TeamDetail):
       if (!result.success || !result.data) return false
       detail = result.data as TeamDetail
     }
-    if (detail.team.ephemeral) return false
+    if (detail.team.ephemeral) return openCollabWork(detail, target)
     const spaceId = localTeamSpace(detail)
     if (!spaceId) return false
     return tryOpenTeamConversation(spaceId, {
@@ -87,6 +89,26 @@ export async function openTeamWork(target: TeamWorkTarget, loaded?: TeamDetail):
     console.warn('[TeamNavigation] Team task could not be opened on the homepage', { teamId: target.teamId, epochId: target.epochId, error })
     return false
   }
+}
+
+/**
+ * A temporary collaboration's work lives in the conversation that leads it: open
+ * that conversation, on the member who asked or reported, at their question when
+ * there is one. False when that conversation is not on this computer.
+ */
+export function openCollabWork(detail: TeamDetail, target: Pick<TeamWorkTarget, 'appId' | 'decisionEntryId'>): boolean {
+  const conversationId = detail.team.coordinatorConversationId
+  const spaceId = detail.team.owningSpaceId
+  if (!conversationId || !spaceId) return false
+  const spaces = useSpaceStore.getState()
+  if (spaces.haloSpace?.id !== spaceId && !spaces.spaces.some(space => space.id === spaceId)) return false
+  const member = target.appId && detail.roster.some(row => row.appId === target.appId) ? target.appId : null
+  if (member) {
+    useCollabMemberViewStore.getState().open(conversationId, member,
+      target.decisionEntryId ? { entryId: target.decisionEntryId, seq: Date.now() } : undefined)
+  } else useCollabMemberViewStore.getState().close()
+  navigateToConversation(spaceId, conversationId)
+  return true
 }
 
 /**

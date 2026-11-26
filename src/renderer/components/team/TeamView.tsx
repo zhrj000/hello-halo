@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, Info, Settings, Users, PanelLeft, UserPlus, Play, Pause, BookmarkPlus, Loader2 } from 'lucide-react'
 import { type RosterMember, type TeamDetail } from '../../../shared/apps/team-types'
 import { useTeamStore, useTeamView, useSelectTeamTask } from '../../stores/team.store'
@@ -19,21 +19,49 @@ import { useTaskBoard } from './workbench/useTaskBoard'
 import { taskGroup, visibleTasks } from './workbench/model'
 import { detailForTask, ownedTaskMembers } from './workbench/members'
 import { LegacyTeamNotice } from './workbench/LegacyTeamNotice'
-import { canvasLifecycle } from '../../services/canvas-lifecycle'
+import { canvasLifecycle, type TeamTaskViewMemory } from '../../services/canvas-lifecycle'
 import { navigateToConversation } from '../../utils/conversation-navigation'
 import { openPersonTeam } from '../../utils/people-navigation'
+import { TeamTaskProgress } from './TeamTaskProgress'
 
 const TeamCreateDialog = lazy(() => import('./TeamCreateDialog').then(module => ({ default: module.TeamCreateDialog })))
 // The team page is a screen of its own; it loads when a team is first opened, not with the canvas.
 const TeamDetailPage = lazy(() => import('./detail/TeamDetailPage').then(module => ({ default: module.TeamDetailPage })))
 
+/**
+ * A team opened on its own. A temporary collaboration is one task led from a
+ * conversation, so it shows as that task's team progress (its members are talked
+ * to in that conversation); every other team is its team page. Only a team left
+ * over from the old space coordinator, waiting to be repaired, keeps the old
+ * workbench, which carries its repair notice.
+ */
 export function TeamView({ detail: teamDetail, onBack, spaceEntry = false }: { detail: TeamDetail; onBack?: () => void; spaceEntry?: boolean }) {
-  if (!teamDetail.team.ephemeral && !teamDetail.legacyCoordinator && !(spaceEntry && teamDetail.team.coordinatorConversationId)) {
-    return <Suspense fallback={<TeamPageLoading />}>
-      <TeamDetailPage detail={teamDetail} onBack={onBack} />
-    </Suspense>
-  }
-  return <LegacyTeamView detail={teamDetail} onBack={onBack} spaceEntry={spaceEntry} />
+  if (teamDetail.legacyCoordinator) return <LegacyTeamView detail={teamDetail} onBack={onBack} spaceEntry={spaceEntry} />
+  if (teamDetail.team.ephemeral) return <CollabTeamView detail={teamDetail} onBack={spaceEntry ? undefined : onBack ?? (() => useTeamStore.getState().selectTeam(null))} />
+  return <Suspense fallback={<TeamPageLoading />}>
+    <TeamDetailPage detail={teamDetail} onBack={onBack} />
+  </Suspense>
+}
+
+const NO_REVEAL = () => {}
+
+/** A temporary collaboration: the team progress of its one task, keep-as-team included. */
+function CollabTeamView({ detail, onBack }: { detail: TeamDetail; onBack?: () => void }) {
+  const { t } = useTranslation()
+  const conversations = useTeamView(view => view.conversations)
+  const loading = useTeamView(view => view.isLoadingConversations)
+  const memory = useRef<TeamTaskViewMemory>({}).current
+  const task = conversations.find(item => item.kind === 'collab') ?? null
+  return <div className="flex h-full min-h-0 flex-col">
+    {onBack && <div className="flex shrink-0 items-center px-3 py-2">
+      <button onClick={onBack} aria-label={t('Back to teams')} className="rounded-lg p-2 hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"><ArrowLeft size={18} /></button>
+    </div>}
+    <div className="min-h-0 flex-1">
+      {task ? <TeamTaskProgress spaceId={detail.team.owningSpaceId} epochId={task.epochId} teamDetail={detail} memory={memory} onRevealHandled={NO_REVEAL} />
+        : loading ? <TeamPageLoading />
+          : <p role="status" className="p-6 text-sm text-muted-foreground">{t('This collaboration’s conversation is unavailable.')}</p>}
+    </div>
+  </div>
 }
 
 function TeamPageLoading() {

@@ -31,6 +31,7 @@ import { useAppsStore, AppApiError } from '../../stores/apps.store'
 import { useSpaceStore } from '../../stores/space.store'
 import { useTranslation } from '../../i18n'
 import { CreateSpaceForm } from '../space/CreateSpaceForm'
+import { SpaceSearchSelect, type SpaceSearchOption } from '../space/SpaceSearchSelect'
 import type { AppSpec, SkillSpec } from '../../../shared/apps/spec-types'
 import { AppModelSelector } from './AppModelSelector'
 import { SystemPromptEditor } from './SystemPromptEditor'
@@ -50,6 +51,9 @@ import { readFileText, readDirectoryEntryToMap, readFileListToMap } from './file
 import { FileImportZone } from './FileImportZone'
 
 // Lazy-load CodeMirrorEditor to keep initial bundle small
+/** Install targets for the workspace picker: the default workspace pinned, then dedicated ones. */
+type SpaceOptions = { pinned: SpaceSearchOption[]; spaces: SpaceSearchOption[] }
+
 const CodeMirrorEditor = lazy(() =>
   import('../canvas/viewers/CodeMirrorEditor').then(m => ({ default: m.CodeMirrorEditor }))
 )
@@ -318,10 +322,10 @@ export function AppInstallDialog({ onClose, onInstalled }: AppInstallDialogProps
   // Install targets: Halo space first, then dedicated spaces. Halo is a valid
   // home for a digital human (the WeCom scan-auth flow installs there too), so
   // offering it here keeps both entry points consistent.
-  const allSpaces = useMemo(
-    () => (haloSpace ? [haloSpace, ...spaces] : spaces),
-    [haloSpace, spaces]
-  )
+  const spaceOptions = useMemo<SpaceOptions>(() => ({
+    pinned: haloSpace ? [{ id: haloSpace.id, label: `${haloSpace.name} (${t('Default workspace')})` }] : [],
+    spaces: spaces.map(s => ({ id: s.id, label: s.name })),
+  }), [haloSpace, spaces, t])
 
   const [mode, setMode] = useState<InstallMode>('visual')
   const [form, setForm] = useState<VisualFormState>({ ...INITIAL_FORM })
@@ -824,7 +828,7 @@ export function AppInstallDialog({ onClose, onInstalled }: AppInstallDialogProps
             /* ── Import mode ── */
             <ImportTab
               importState={importState}
-              allSpaces={allSpaces}
+              spaceOptions={spaceOptions}
               selectedSpaceId={selectedSpaceId}
               onSelectedSpaceChange={setSelectedSpaceId}
               onFile={handleImportFile}
@@ -855,16 +859,13 @@ export function AppInstallDialog({ onClose, onInstalled }: AppInstallDialogProps
               <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                 {t('Install to')}
               </h3>
-              <select
+              <SpaceSearchSelect
                 value={selectedSpaceId}
-                onChange={e => setSelectedSpaceId(e.target.value)}
-                className="w-full px-3 py-2 text-sm bg-secondary border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground"
-              >
-                <option value="" disabled>{t('Select a workspace')}</option>
-                {allSpaces.map(s => (
-                  <option key={s.id} value={s.id}>{s.name}</option>
-                ))}
-              </select>
+                onChange={setSelectedSpaceId}
+                pinned={spaceOptions.pinned}
+                spaces={spaceOptions.spaces}
+                variant="secondary"
+              />
               {/* New Space — accordion (toggle + body as one unit to avoid spacing leaks) */}
               <div>
                 <button
@@ -952,7 +953,7 @@ export function AppInstallDialog({ onClose, onInstalled }: AppInstallDialogProps
 
 function ImportTab({
   importState,
-  allSpaces,
+  spaceOptions,
   selectedSpaceId,
   onSelectedSpaceChange,
   onFile,
@@ -964,7 +965,7 @@ function ImportTab({
   loading,
 }: {
   importState: ImportState
-  allSpaces: Array<{ id: string; name: string; icon: string }>
+  spaceOptions: SpaceOptions
   selectedSpaceId: string
   onSelectedSpaceChange: (id: string) => void
   onFile: (file: File) => void
@@ -1148,16 +1149,13 @@ function ImportTab({
           <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             {t('Install to')}
           </h3>
-          <select
+          <SpaceSearchSelect
             value={selectedSpaceId}
-            onChange={e => onSelectedSpaceChange(e.target.value)}
-            className="w-full px-3 py-2 text-sm bg-secondary border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground"
-          >
-            <option value="" disabled>{t('Select a workspace')}</option>
-            {allSpaces.map(s => (
-              <option key={s.id} value={s.id}>{s.name}</option>
-            ))}
-          </select>
+            onChange={onSelectedSpaceChange}
+            pinned={spaceOptions.pinned}
+            spaces={spaceOptions.spaces}
+            variant="secondary"
+          />
         </div>
       )}
 

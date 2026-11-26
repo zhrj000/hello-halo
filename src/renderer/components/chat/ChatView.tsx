@@ -27,7 +27,7 @@ import { useChatStore, selectActiveConversationId, conversationKind, digitalHuma
 import { useAppsStore } from '../../stores/apps.store'
 import { useOnboardingStore } from '../../stores/onboarding.store'
 import { useTaskPanelStore } from '../../stores/taskPanel.store'
-import { useCollabMemberViewStore } from '../../stores/collab-member-view.store'
+import { useCollabMemberViewStore, type CollabMemberFocus } from '../../stores/collab-member-view.store'
 import { MessageList } from './MessageList'
 import type { MessageListHandle, MessageListProps } from './MessageList'
 import { InputArea } from './InputArea'
@@ -169,8 +169,8 @@ export function ChatView({ isCompact = false, isVisible = true }: ChatViewProps)
 
   const collabView = useCollabMemberViewStore(state => state.view)
   const collabMemberAppId = collabView && collabView.conversationId === activeConversationId ? collabView.appId : null
-  const openCollabMember = useCallback((appId: string) => {
-    if (activeConversationId) useCollabMemberViewStore.getState().open(activeConversationId, appId)
+  const openCollabMember = useCallback((appId: string, focus?: CollabMemberFocus) => {
+    if (activeConversationId) useCollabMemberViewStore.getState().open(activeConversationId, appId, focus)
   }, [activeConversationId])
   const closeCollabMember = useCollabMemberViewStore(state => state.close)
 
@@ -606,7 +606,7 @@ export function ChatView({ isCompact = false, isVisible = true }: ChatViewProps)
       `}
     >
       {collabMemberAppId && currentSpaceId && activeConversationId ? (
-        <TeamCollabMemberView spaceId={currentSpaceId} conversationId={activeConversationId} appId={collabMemberAppId}
+        <TeamCollabMemberView spaceId={currentSpaceId} conversationId={activeConversationId} appId={collabMemberAppId} focus={collabView?.focus}
           onSelect={openCollabMember} onReturn={closeCollabMember} />
       ) : <>
       {/* Messages area wrapper - relative for button positioning */}
