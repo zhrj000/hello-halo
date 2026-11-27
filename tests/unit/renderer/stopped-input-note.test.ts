@@ -21,8 +21,8 @@ vi.mock('../../../src/renderer/stores/chat.store', () => ({
 }))
 vi.mock('../../../src/renderer/stores/space.store', () => ({ useSpaceStore: (selector: (state: unknown) => unknown) => selector({ currentSpace: null }) }))
 vi.mock('../../../src/renderer/components/references', () => ({
-  MessageReferenceChips: ({ references, className }: { references: unknown[]; className?: string }) => references.length
-    ? createElement('div', { className, 'data-reference-chips': true }, 'selection chip')
+  MessageReferenceChips: ({ references, className, compact }: { references: unknown[]; className?: string; compact?: boolean }) => references.length
+    ? createElement('div', { className, 'data-reference-chips': true, 'data-compact': !!compact }, 'selection chip')
     : null,
   MessageTaskCard: () => null,
   useConversationReferenceScope: () => null,
@@ -61,10 +61,10 @@ describe('supplement image chips', () => {
     }))
     expect(html.match(/aria-haspopup="dialog"/g)).toHaveLength(2)
     expect(html.indexOf('second.png')).toBeLessThan(html.indexOf('also check the logs'))
-    expect(html).toContain('max-w-[min(240px,100%)]')
+    // Compact chips: one 20px line, the height of the 13px text beside them.
+    expect(html).toContain('h-5')
+    expect(html).toContain('max-w-[min(220px,100%)]')
     expect(html).toContain('truncate')
-    expect(html).toContain('[&amp;_.text-foreground]:text-inherit')
-    expect(html).toContain('[&amp;_.text-muted-foreground]:text-inherit')
     expect(html).not.toContain('<img')
   })
 
@@ -108,9 +108,10 @@ describe('pending supplement images', () => {
     expect(html).not.toContain('<img')
     expect(html).not.toContain('References')
     if (summary) expect(html).toContain(summary)
-    expect(html).toContain('min-w-0 flex-1')
-    expect(html).toContain('[&amp;_.text-foreground]:text-inherit')
-    expect(html).toContain('[&amp;_.text-muted-foreground]:text-inherit')
+    // The same card and rows as the Appended note it turns into.
+    expect(html).toContain('Queued')
+    expect(html).toContain('lucide-corner-down-right')
+    expect(html).toContain('flex min-w-0 flex-wrap items-center')
   })
 
   it('keeps text, named references and the unnamed-reference fallback', () => {
@@ -151,10 +152,9 @@ describe('a person’s input voided by Stop', () => {
         },
       }],
     }))
-    expect(html).toContain('flex min-w-0 flex-wrap items-center gap-1.5')
+    expect(html).toContain('flex min-w-0 flex-wrap items-center')
     expect(html).toContain('data-reference-chips="true"')
-    expect(html).toContain('[&amp;_.text-foreground]:text-inherit')
-    expect(html).toContain('[&amp;_.text-muted-foreground]:text-inherit')
+    expect(html).toContain('data-compact="true"')
     expect(html.indexOf('selection chip')).toBeLessThan(html.indexOf('also check the logs'))
     expect(html.indexOf('Stopped, not handled')).toBeGreaterThan(html.indexOf('also check the logs'))
     expect(html).toContain('min-w-0 whitespace-pre-wrap')
@@ -167,7 +167,7 @@ describe('a person’s input voided by Stop', () => {
     expect(html).toContain('aria-haspopup="dialog"')
     expect(html).toContain('Attached image')
     expect(html).not.toContain('<img')
-    expect(html).toContain('flex min-w-0 flex-1 flex-col')
+    expect(html).toContain('flex min-w-0 flex-col')
     expect(html).toContain('Stopped, not handled')
   })
 
@@ -177,5 +177,25 @@ describe('a person’s input voided by Stop', () => {
     }))
     expect(html.match(/Stopped, not handled/g)).toHaveLength(1)
     expect(html.indexOf('Stopped, not handled')).toBeGreaterThan(html.indexOf('second'))
+  })
+})
+
+describe('the Appended note on a finished reply', () => {
+  const reply: Message = { id: 'r1', role: 'assistant', content: 'done', timestamp: '2026-10-13T10:01:00.000Z' }
+  const additions: Message[] = [{ ...sent, id: 'add', source: 'injection', content: 'shorter title' }]
+
+  it('sits above the copy action, inside the reply', () => {
+    const html = renderToStaticMarkup(createElement(MessageItem, { message: reply, isInContainer: true, additions }))
+    expect(html).toContain('shorter title')
+    expect(html.indexOf('Appended')).toBeLessThan(html.indexOf('Copy message'))
+  })
+
+  it('is kept under a reply that ended in an error', () => {
+    const html = renderToStaticMarkup(createElement(MessageItem, { message: { ...reply, content: '', error: 'boom' }, isInContainer: true, additions }))
+    expect(html).toContain('shorter title')
+  })
+
+  it('shows nothing extra when there were no additions', () => {
+    expect(renderToStaticMarkup(createElement(MessageItem, { message: reply, isInContainer: true }))).not.toContain('Appended')
   })
 })

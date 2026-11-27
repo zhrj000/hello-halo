@@ -50,6 +50,9 @@ const HOVER_CLOSE_MS = 150
 
 const CHIP = 'group relative inline-flex max-w-[240px] items-center rounded-lg border border-border/70 bg-background/60 text-[12.5px] leading-none text-foreground animate-fade-in'
 const CHIP_BODY = 'inline-flex min-w-0 items-center gap-1.5 h-7 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50'
+// Compact: sized to sit on a 13px line of text (the "Appended" and "Queued" notes), not to be a target of its own.
+const CHIP_COMPACT = 'group relative inline-flex max-w-[220px] items-center rounded-md border border-border-soft bg-background text-xs leading-none text-foreground'
+const CHIP_BODY_COMPACT = 'inline-flex min-w-0 items-center gap-1 h-5 px-1.5 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50'
 // Seen on hover or focus on a desktop, always on a phone; the touch target reaches 36px past the 18px glyph.
 const REMOVE = `relative mr-1 flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-md text-muted-foreground
   before:absolute before:-inset-[9px] before:content-[''] sm:before:hidden hover:bg-secondary hover:text-foreground
@@ -117,10 +120,12 @@ interface MessageReferenceChipsProps {
   references: readonly ContentReference[]
   baseDir?: string
   className?: string
+  /** Smaller chips that sit inline with a line of 13px text. */
+  compact?: boolean
 }
 
 /** The references a sent message carried, read-only. */
-export const MessageReferenceChips = memo(function MessageReferenceChips({ references, baseDir, className = '' }: MessageReferenceChipsProps) {
+export const MessageReferenceChips = memo(function MessageReferenceChips({ references, baseDir, className = '', compact = false }: MessageReferenceChipsProps) {
   const groups = useMemo(() => groupReferences(references), [references])
   const reveal = useCallback((ref: ContentReference) => {
     void revealReference(ref)
@@ -129,9 +134,9 @@ export const MessageReferenceChips = memo(function MessageReferenceChips({ refer
   return (
     <div className={`flex flex-wrap items-center gap-1.5 ${className}`}>
       {(['comments', 'selections'] as const).map(kind => groups[kind].length > 0 && (
-        <GroupChip key={kind} kind={kind} references={groups[kind]} baseDir={baseDir} onReveal={reveal} />
+        <GroupChip key={kind} kind={kind} references={groups[kind]} baseDir={baseDir} compact={compact} onReveal={reveal} />
       ))}
-      {groups.files.map(ref => <FileChip key={ref.id} reference={ref} />)}
+      {groups.files.map(ref => <FileChip key={ref.id} reference={ref} compact={compact} />)}
     </div>
   )
 })
@@ -140,7 +145,7 @@ export const MessageReferenceChips = memo(function MessageReferenceChips({ refer
 // Chips
 // ============================================
 
-function FileChip({ reference, onRemove }: { reference: ContentReference; onRemove?: () => void }) {
+function FileChip({ reference, onRemove, compact = false }: { reference: ContentReference; onRemove?: () => void; compact?: boolean }) {
   const { t } = useTranslation()
   if (reference.source.kind !== 'path') return null
   const { path, isDirectory } = reference.source
@@ -148,18 +153,19 @@ function FileChip({ reference, onRemove }: { reference: ContentReference; onRemo
   const Icon = isDirectory ? Folder : FileText
   const body = (
     <>
-      <Icon size={13} className="shrink-0 text-muted-foreground" aria-hidden />
+      <Icon size={compact ? 12 : 13} className="shrink-0 text-muted-foreground" aria-hidden />
       <span className="truncate">{name}</span>
     </>
   )
+  const bodyClass = compact ? CHIP_BODY_COMPACT : `${CHIP_BODY} ${onRemove ? 'pl-2 pr-1' : 'px-2'}`
   return (
-    <span title={path} className={CHIP}>
+    <span title={path} className={compact ? CHIP_COMPACT : CHIP}>
       {!onRemove && isElectron() ? (
-        <button type="button" onClick={() => void api.showArtifactInFolder(path)} className={`${CHIP_BODY} px-2 hover:bg-secondary transition-colors`}>
+        <button type="button" onClick={() => void api.showArtifactInFolder(path)} className={`${bodyClass} hover:bg-secondary transition-colors`}>
           {body}
         </button>
       ) : (
-        <span className={`${CHIP_BODY} ${onRemove ? 'pl-2 pr-1' : 'px-2'}`}>{body}</span>
+        <span className={bodyClass}>{body}</span>
       )}
       {onRemove && (
         <button type="button" onClick={onRemove} aria-label={t('Remove {{name}}', { name })} className={REMOVE}>
@@ -178,6 +184,8 @@ interface GroupChipProps {
   bumps?: boolean
   /** The composer's comments chip: a comment whose place cannot be shown opens beside it. */
   composerKey?: string
+  /** Read-only and small, inline with a line of text. */
+  compact?: boolean
   onReveal: (ref: ContentReference) => void
   onRemoveOne?: (ref: ContentReference) => void
   onRemoveGroup?: () => void
@@ -185,7 +193,7 @@ interface GroupChipProps {
 
 type OpenState = null | { by: 'hover' | 'pin'; focusFirst: boolean }
 
-function GroupChip({ kind, references, baseDir, bumps = false, composerKey, onReveal, onRemoveOne, onRemoveGroup }: GroupChipProps) {
+function GroupChip({ kind, references, baseDir, bumps = false, composerKey, compact = false, onReveal, onRemoveOne, onRemoveGroup }: GroupChipProps) {
   const { t } = useTranslation()
   const isMobile = useIsMobile()
   const chipRef = useRef<HTMLButtonElement>(null)
@@ -226,7 +234,7 @@ function GroupChip({ kind, references, baseDir, bumps = false, composerKey, onRe
 
   return (
     <span
-      className={CHIP}
+      className={compact ? CHIP_COMPACT : CHIP}
       onPointerEnter={e => hoverIn(e.pointerType)}
       onPointerLeave={e => hoverOut(e.pointerType)}
     >
@@ -238,11 +246,11 @@ function GroupChip({ kind, references, baseDir, bumps = false, composerKey, onRe
         aria-expanded={!!open}
         // A keyboard press (detail 0) opens the list with its first row focused.
         onClick={e => (open?.by === 'pin' ? close(false) : setOpen({ by: 'pin', focusFirst: e.detail === 0 }))}
-        className={`${CHIP_BODY} hover:bg-secondary transition-colors ${onRemoveGroup ? 'pl-2 pr-1' : 'px-2'}`}
+        className={`${compact ? CHIP_BODY_COMPACT : `${CHIP_BODY} ${onRemoveGroup ? 'pl-2 pr-1' : 'px-2'}`} hover:bg-secondary transition-colors`}
       >
         {kind === 'comments'
-          ? <MessageSquare size={13} className="shrink-0 text-muted-foreground" aria-hidden />
-          : <TextQuote size={13} className="shrink-0 text-muted-foreground" aria-hidden />}
+          ? <MessageSquare size={compact ? 12 : 13} className="shrink-0 text-muted-foreground" aria-hidden />
+          : <TextQuote size={compact ? 12 : 13} className="shrink-0 text-muted-foreground" aria-hidden />}
         <span key={bump} className={`truncate ${bump > 0 ? 'animate-chip-bump' : ''}`}>{label}</span>
       </button>
       {onRemoveGroup && (

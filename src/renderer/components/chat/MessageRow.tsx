@@ -237,13 +237,15 @@ export const MessageRow = memo(function MessageRow({
               allowViewChanges={allowViewChanges}
               actionsOnHover={actionsOnHover}
               hideEnding={endingShownBelow}
+              additions={injectionMessages}
             />
           ) : message.metadata?.ending && !endingShownBelow && (
             <ReplyEndingNote ending={message.metadata.ending} hasAnswer={false} />
           )}
 
-          {/* Injection annotation — permanently shows mid-turn user messages */}
-          {injectionMessages && injectionMessages.length > 0 && (
+          {/* Injection annotation — permanently shows mid-turn user messages; a reply with no
+              bubble has no actions row to sit above, so it stands here on its own. */}
+          {!(message.content || message.error) && injectionMessages && injectionMessages.length > 0 && (
             <InjectionAnnotation messages={injectionMessages} />
           )}
           {afterReply}
@@ -270,8 +272,8 @@ export const MessageRow = memo(function MessageRow({
               actionsOnHover={actionsOnHover}
               hideEnding={endingShownBelow}
               isInContainer
+              additions={injectionMessages}
             />
-            <InjectionAnnotation messages={injectionMessages} />
             {afterReply}
           </div>
         </div>

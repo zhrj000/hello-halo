@@ -35,6 +35,7 @@ import { truncateText, getToolFriendlyFormat } from './thought-utils'
 import type { Message, Thought, ThoughtsSummary } from '../../types'
 import { TurnErrorBubble } from './TurnErrorBubble'
 import { ReplyEndingNote } from './ReplyEndingNote'
+import { InjectionAnnotation } from './InjectionAnnotation'
 import { useTranslation } from '../../i18n'
 import { useChatStore, selectActiveConversationId } from '../../stores/chat.store'
 import { SourceChips } from './SourceChips'
@@ -65,6 +66,8 @@ interface MessageItemProps {
   alignStart?: boolean
   /** The chat shows how this reply ended right below it, so its own note steps aside. */
   hideEnding?: boolean
+  /** The owner's messages read while this reply ran ("Appended"), shown above the copy/token row. */
+  additions?: Message[]
 }
 
 // Collapsible thought history component
@@ -259,7 +262,7 @@ function ThoughtItem({ thought }: { thought: Thought }) {
   )
 }
 
-export const MessageItem = memo(function MessageItem({ message, previousCost = 0, hideThoughts = false, isInContainer = false, isWorking = false, isWaitingMore = false, hideBrowserLiveView = false, hideTerminalOpen = false, allowViewChanges = false, actionsOnHover = false, alignStart = false, hideEnding = false }: MessageItemProps) {
+export const MessageItem = memo(function MessageItem({ message, previousCost = 0, hideThoughts = false, isInContainer = false, isWorking = false, isWaitingMore = false, hideBrowserLiveView = false, hideTerminalOpen = false, allowViewChanges = false, actionsOnHover = false, alignStart = false, hideEnding = false, additions }: MessageItemProps) {
   const isUser = message.role === 'user'
   const alignEnd = isUser && !alignStart
   const isStreaming = (message as any).isStreaming
@@ -359,6 +362,7 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
   const bubble = isErrorOnly ? (
     <div className={`${!isInContainer ? 'w-[85%]' : 'w-full'}`}>
       <TurnErrorBubble error={message.error ?? ''} />
+      {!!additions?.length && <InjectionAnnotation messages={additions} />}
     </div>
   ) : (
     <div
@@ -472,6 +476,9 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
             : undefined}
         />
       )}
+
+      {/* What the owner added while the reply ran belongs to the reply, so it sits above the reply's actions. */}
+      {!isUser && !!additions?.length && <InjectionAnnotation messages={additions} />}
 
       {/* Copy button + token usage for a finished assistant reply. Each shows on its own:
           digital-human and team transcripts carry no per-reply tokenUsage.

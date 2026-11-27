@@ -189,9 +189,10 @@ export function MessageImages({ images, presentation = 'preview' }: MessageImage
             title={image.name || t('Attached image')}
             aria-haspopup="dialog"
             onClick={() => openViewer(index)}
-            className="inline-flex h-7 min-w-0 max-w-[min(240px,100%)] items-center gap-1.5 rounded-lg border border-border-soft bg-background/60 px-2 text-[12.5px] leading-none text-foreground hover:bg-secondary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+            // Sized like the compact reference chips beside it: inline with a 13px line of text.
+            className="inline-flex h-5 min-w-0 max-w-[min(220px,100%)] items-center gap-1 rounded-md border border-border-soft bg-background px-1.5 text-xs leading-none text-foreground hover:bg-secondary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
           >
-            <ImageIcon size={13} className="shrink-0 text-muted-foreground" aria-hidden />
+            <ImageIcon size={12} className="shrink-0 text-muted-foreground" aria-hidden />
             <span className="truncate">{image.name || t('Attached image')}</span>
           </button>
         ))}
