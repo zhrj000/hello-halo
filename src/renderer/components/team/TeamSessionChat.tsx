@@ -22,7 +22,7 @@ import { mergeArrivingMessages, withoutLiveInputs, withStoppedInputs } from '../
 import { usePeopleViewStore } from '../../stores/people-view.store'
 import { useChatStore } from '../../stores/chat.store'
 import { MessageRow } from '../chat/MessageRow'
-import { useStickToBottom, transcriptRowClass, captureTranscriptPosition, restoreTranscriptPosition } from '../chat/transcript'
+import { useStickToBottom, transcriptRowClass, captureTranscriptPosition, restoreTranscriptPosition, SegmentTime } from '../chat/transcript'
 import { CompactNotice } from '../chat/CompactNotice'
 import { StreamingSection } from '../chat/StreamingSection'
 import { WorkViewMemoryProvider, useTranscriptWorkView } from '../chat/work-history/view-memory'
@@ -635,6 +635,7 @@ export function TeamSessionChat({
 
             {(loadState !== 'error' || messages.length > 0) && (renderMessages ? renderMessages(visibleMessages, hasStreaming ? thoughts : [], endedReply?.id) : visibleMessages.map((message, index) => (
               <div key={message.clientKey ?? message.id} className={transcriptRowClass(message)}>
+                <SegmentTime messages={visibleMessages} index={index} />
                 <MessageRow message={message} hideBrowserLiveView hideTerminalOpen senderName={senderName} authorName={authorName} actionsOnHover={index !== latestReply}
                   endingShownBelow={message === endedReply} streamedThoughts={message.id === latestReplyId ? streamedThoughts : undefined} />
               </div>

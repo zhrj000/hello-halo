@@ -27,6 +27,7 @@ vi.mock('../../../src/renderer/components/chat/transcript', () => ({
   useStickToBottom: () => ({ scrollerRef: { current: null }, contentRef: { current: null },
     scroller: null, scrollToBottom: () => {}, detach: () => {}, isFollowing: () => true }),
   transcriptRowClass: () => '', captureTranscriptPosition: () => null, restoreTranscriptPosition: () => false,
+  SegmentTime: () => null,
 }))
 vi.mock('../../../src/renderer/components/chat/useBrowserToolCalls', () => ({ useBrowserToolCalls: () => [] }))
 vi.mock('../../../src/renderer/components/chat/MessageRow', () => ({ MessageRow: () => null }))

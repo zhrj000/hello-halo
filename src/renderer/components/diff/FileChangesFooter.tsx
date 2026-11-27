@@ -1,5 +1,5 @@
 /**
- * FileChangesFooter - "Changed N files · +A −D ›" card under an AI
+ * FileChangesFooter - "Changed N files · +A −D ›" line under an AI
  * reply that edited files. Opens the reply's edits in the canvas changes view.
  *
  * The counts come from the message metadata (shown at once), or from the
@@ -52,23 +52,26 @@ export function FileChangesFooter({ fileChangesSummary, thoughts, reply }: FileC
 
   const format = (value: number) => new Intl.NumberFormat(i18n.language).format(value)
 
+  // Drawn like the reply's "Worked for" line above it — a quiet line, not a card —
+  // so the two entries into a reply's details read as one family. The fill bleeds
+  // into the gutter, so the icon keeps the reply's left edge.
   return (
     <button
       type="button"
       onClick={open}
       disabled={!reply}
-      className="group mt-3 mb-2 flex h-8 w-fit max-w-full items-center gap-2 rounded-lg border border-border-soft bg-card pl-2.5 pr-2 text-left text-xs text-muted-foreground transition-colors hover:text-foreground disabled:cursor-default disabled:hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+      className="group/changes -mx-1.5 mt-3 flex w-fit max-w-[calc(100%+0.75rem)] min-h-8 items-center gap-[7px] rounded-[5px] px-1.5 py-1 text-left text-[13px] text-muted-foreground transition-colors duration-200 hover:bg-secondary/60 disabled:cursor-default disabled:hover:bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary [@media(pointer:coarse)]:min-h-11"
     >
       <FileDiff size={14} className="shrink-0 text-faint-foreground" aria-hidden />
-      <span className="truncate">{t('Changed {{count}} files', { count: changes.totalFiles })}</span>
-      <span className="shrink-0 font-mono text-[11px]">
-        <span className="text-diff-add/80">+{format(changes.totalAdded)}</span>{' '}
-        <span className="text-diff-del/80">−{format(changes.totalRemoved)}</span>
+      <span className="min-w-0 truncate">{t('Changed {{count}} files', { count: changes.totalFiles })}</span>
+      <span className="shrink-0 text-xs tabular-nums text-faint-foreground">
+        · <span className="text-diff-add/70">+{format(changes.totalAdded)}</span>{' '}
+        <span className="text-diff-del/70">−{format(changes.totalRemoved)}</span>
       </span>
       {reply && (
         <>
           <span className="sr-only">{t('View changes')}</span>
-          <ChevronRight size={14} className="-ml-0.5 shrink-0 text-faint-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-muted-foreground" aria-hidden />
+          <ChevronRight size={12} className="shrink-0 opacity-0 transition-opacity duration-200 group-hover/changes:opacity-100 group-focus-visible/changes:opacity-100 [@media(hover:none)]:opacity-100" aria-hidden />
         </>
       )}
     </button>
