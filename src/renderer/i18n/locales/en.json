@@ -4347,5 +4347,8 @@
   "Stop this reminder?": "Stop this reminder?",
   "It will not come back to this conversation again. To have it again, ask the digital human.": "It will not come back to this conversation again. To have it again, ask the digital human.",
   "Reminder": "Reminder",
-  "Once": "Once"
+  "Once": "Once",
+  "Received a message from “{{title}}”": "Received a message from “{{title}}”",
+  "Sent by that conversation's AI, not by you": "Sent by that conversation's AI, not by you",
+  "One-way notice from a scheduled run, no reply possible": "One-way notice from a scheduled run, no reply possible"
 }

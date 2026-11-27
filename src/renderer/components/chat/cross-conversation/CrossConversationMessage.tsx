@@ -1,6 +1,10 @@
-/** A peer's delivery is a source line, not a message from the person. */
+/**
+ * A peer's delivery received while a reply was being written: a line of that
+ * reply's work, not a message from the person. Anywhere else another
+ * conversation's messages read as the received line (team-collab/ReplyOpeners).
+ */
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Send, ExternalLink } from 'lucide-react'
 import type { Message } from '../../../types'
 import { getCurrentLanguage, useTranslation } from '../../../i18n'
@@ -11,13 +15,6 @@ import { navigateToAppChat, navigateToConversation } from '../../../utils/conver
 import { formatRunStart } from '../../../utils/format-time'
 import { readProvenance } from './message-source'
 import { clipSubject, PROCESS_CUE, PROCESS_DETAIL, PROCESS_LINE, PROCESS_TIME } from '../process-line'
-
-/**
- * A delivery this recent is treated as still unhandled by this conversation's
- * AI: it opens itself, then settles back to the collapsed resting state. The
- * renderer has no signal for "the AI has read it", so arrival time stands in.
- */
-const FRESH_DELIVERY_MS = 5_000
 
 interface CrossConversationMessageProps {
   message: Message
@@ -32,10 +29,7 @@ export function CrossConversationMessage({ message, inProcess = false }: CrossCo
   const { t } = useTranslation()
   const provenance = readProvenance(message)
 
-  const [isFresh, setIsFresh] = useState(
-    () => !inProcess && Date.now() - new Date(message.timestamp).getTime() < FRESH_DELIVERY_MS
-  )
-  const [isExpanded, setIsExpanded] = useState(isFresh)
+  const [isExpanded, setIsExpanded] = useState(false)
 
   const currentSpaceId = useChatStore(s => s.currentSpaceId)
   // A digital human's chat is not in the space's conversation list; it stays
@@ -50,15 +44,6 @@ export function CrossConversationMessage({ message, inProcess = false }: CrossCo
     return s.getSpaceState(currentSpaceId).conversations
       .find(c => c.id === provenance.fromConversationId)?.title
   })
-
-  useEffect(() => {
-    if (!isFresh) return
-    const timer = setTimeout(() => {
-      setIsFresh(false)
-      setIsExpanded(false)
-    }, FRESH_DELIVERY_MS)
-    return () => clearTimeout(timer)
-  }, [isFresh])
 
   if (!provenance) return null
 
@@ -112,7 +97,7 @@ export function CrossConversationMessage({ message, inProcess = false }: CrossCo
   return (
     <div className={inProcess ? 'min-w-0' : 'w-[85%] min-w-0'} data-message-id={message.id}>
       <button type="button" onClick={() => setIsExpanded(v => !v)} aria-expanded={isExpanded} className={PROCESS_LINE}>
-        <Send size={14} aria-hidden="true" className={`shrink-0 ${isFresh ? 'text-primary' : ''}`} />
+        <Send size={14} aria-hidden="true" className="shrink-0" />
         <span className={`${provenance.summary ? 'max-w-[45%] shrink-0' : 'min-w-0'} truncate`}>{t('From @{{title}}:', { title: displayTitle })}</span>
         {provenance.summary && (
           <span className="min-w-0 truncate text-[13px] text-muted-foreground">{inProcess ? clipSubject(provenance.summary).text : provenance.summary}</span>

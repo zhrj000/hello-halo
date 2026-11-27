@@ -183,14 +183,28 @@ describe('transcript rows', () => {
     expect(done.liveOpeners).toEqual([])
   })
 
-  it('never draws a delivery on a push, another sender’s card, or a reply after a user message', () => {
+  it('never draws a delivery on a push, a record stored without the marker, or a reply after a user message', () => {
     const opener = message({ role: 'system', source: 'team-message', metadata: { teamId: 'team', inputMode: 'turn' } })
     const push = reply(undefined, { source: 'push' })
-    const cross = message({ role: 'system', source: 'cross-conversation', metadata: { fromConversationId: 'other', inputMode: 'turn' } })
-    const source = [user(), reply(), opener, push, cross, reply(), opener, user(), reply()]
+    const legacy = message({ role: 'system', source: 'cross-conversation', metadata: { fromConversationId: 'other' } })
+    const source = [user(), reply(), opener, push, legacy, reply(), opener, user(), reply()]
     const rows = nextTranscriptRows(null, source, false)
     expect(rows.messages).toEqual(source)
     expect(rows.openers.size).toBe(0)
+  })
+
+  it('draws another conversation’s message that opened a turn on the reply it opened, beside a teammate’s', () => {
+    const cross = message({ role: 'system', source: 'cross-conversation', metadata: { fromConversationId: 'other', inputMode: 'turn' } })
+    const team = message({ role: 'system', source: 'team-message', metadata: { teamId: 'team', inputMode: 'turn' } })
+    const unreadable = message({ role: 'system', source: 'cross-conversation', metadata: { inputMode: 'turn' } })
+    const opened = reply()
+    const history = [user(), reply()]
+    const rows = nextTranscriptRows(null, [...history, cross, team, opened], false)
+    expect(rows.messages).toEqual([...history, opened])
+    expect(rows.openers.get(opened.id)).toEqual([cross, team])
+    expect(openerOwner(rows, cross.id)).toBe(opened.id)
+    expect(nextTranscriptRows(null, [...history, cross], true).liveOpeners).toEqual([cross])
+    expect(nextTranscriptRows(null, [...history, unreadable, opened], false).openers.size).toBe(0)
   })
 
   it('gives a view drawing its own selection the same attachment, by reply', () => {

@@ -10,7 +10,7 @@
  */
 
 import type { Message } from '../../../types'
-import { isTeamSystemNotice, isTeamTranscriptMessage } from '../../../../shared/transcript'
+import { isCrossConversationTranscriptMessage, isTeamSystemNotice, isTeamTranscriptMessage } from '../../../../shared/transcript'
 import { messageRowKey, messageRowKeys } from '../../../utils/message-row-key'
 import { arrivedDuring } from './arrivals'
 
@@ -112,9 +112,9 @@ export function inputsByReply(messages: readonly Message[]): Map<string, ReplyIn
   return byReply
 }
 
-/** A teammate's delivery that opened a turn; the writer states it with `inputMode: 'turn'`. */
+/** A teammate's or another conversation's delivery that opened a turn; the writer states it with `inputMode: 'turn'`. */
 function isTurnOpener(message: Message): boolean {
-  return isTeamTranscriptMessage(message) && message.metadata?.inputMode === 'turn'
+  return message.metadata?.inputMode === 'turn' && (isTeamTranscriptMessage(message) || isCrossConversationTranscriptMessage(message))
 }
 
 function isOwnReply(message: Message | undefined): boolean {

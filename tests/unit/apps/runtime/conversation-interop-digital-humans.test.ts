@@ -293,7 +293,7 @@ describe('a space conversation messaging a digital human', () => {
       content: 'please re-run the churn numbers',
       provenance: {
         source: 'cross-conversation',
-        metadata: { fromConversationId: NOTES, fromConversationTitle: 'Research notes', summary: 'rerun churn', forwardDepth: 1 },
+        metadata: { fromConversationId: NOTES, fromConversationTitle: 'Research notes', summary: 'rerun churn', forwardDepth: 1, inputMode: 'turn' },
       },
     })
     expect(transcriptOf(DH_A).at(-1)).toMatchObject({ role: 'system', source: 'cross-conversation', content: 'please re-run the churn numbers' })

@@ -31,7 +31,7 @@ vi.mock('../../../src/renderer/components/chat/cross-conversation', () => ({
   CrossConversationMessage: () => null, CrossConversationNotice: () => null,
   isCrossConversationMessage: () => false, isCrossConversationNotice: () => false,
 }))
-vi.mock('../../../src/renderer/components/chat/team-collab', () => ({ TeamMemberMessage: () => null, isTeamMessage: () => false }))
+vi.mock('../../../src/renderer/components/chat/team-collab', () => ({ TeamMemberMessage: () => null, isTeamMessage: () => false, receivedLineKey: () => null }))
 vi.mock('../../../src/renderer/components/chat/SourceChips', () => ({ SourceChips: () => null }))
 vi.mock('../../../src/renderer/components/chat/ImageAttachmentPreview', () => ({ MessageImages: () => null }))
 vi.mock('../../../src/renderer/components/chat/MarkdownRenderer', () => ({ MarkdownRenderer: ({ content }: { content: string }) => createElement('span', null, content) }))

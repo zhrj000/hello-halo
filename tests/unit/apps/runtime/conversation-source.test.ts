@@ -340,8 +340,9 @@ describe('dispatch', () => {
       spaceId: SPACE,
       conversationId: key,
       message: message.turnInput,
-      recorded: { content: 'the words', provenance: { source: 'cross-conversation', metadata: message.record.metadata } },
-      recordedMessages: [{ content: 'the words', provenance: { source: 'cross-conversation', metadata: message.record.metadata } }],
+      // It opens the turn: the chat draws it on the reply it opened.
+      recorded: { content: 'the words', provenance: { source: 'cross-conversation', metadata: { ...message.record.metadata, inputMode: 'turn' } } },
+      recordedMessages: [{ content: 'the words', provenance: { source: 'cross-conversation', metadata: { ...message.record.metadata, inputMode: 'turn' } } }],
       onMessageAccepted: expect.any(Function),
     })
   })

@@ -213,7 +213,7 @@ describe('chat conversation source', () => {
       expect(h.emitAgentEvent).toHaveBeenCalledWith('agent:input-arrived', 'space-1', 'c1', {
         live: false,
         messages: [
-          { ...message('first', 'system', 'raw peer message'), source: 'cross-conversation', metadata: { fromConversationId: 'peer' } },
+          { ...message('first', 'system', 'raw peer message'), source: 'cross-conversation', metadata: { fromConversationId: 'peer', inputMode: 'turn' } },
           { ...message('second', 'system', 'raw team report'), source: 'team-message', metadata: { fromMemberName: 'Reviewer', inputMode: 'turn' } },
         ],
       })
@@ -317,7 +317,7 @@ describe('chat conversation source', () => {
         content: 'raw words',
         role: 'system',
         source: 'cross-conversation',
-        metadata: { goal: 'keep', fromConversationId: 'z' },
+        metadata: { goal: 'keep', fromConversationId: 'z', inputMode: 'turn' },
       })
       expect(outcome).toEqual({ messageId: 'new' })
     })

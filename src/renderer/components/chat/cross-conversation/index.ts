@@ -9,6 +9,8 @@
 
 export { isCrossConversationMessage, isCrossConversationNotice } from './message-source'
 export { CrossConversationMessage } from './CrossConversationMessage'
+export { useCrossConversationSources } from './useCrossConversationSources'
+export type { CrossConversationSource } from './useCrossConversationSources'
 export { CrossConversationNotice } from './CrossConversationNotice'
 export { ConversationMentionRow } from './ConversationMentionRow'
 export { ConversationReferenceLink } from './ConversationReferenceLink'

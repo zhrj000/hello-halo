@@ -19,11 +19,18 @@ import { shortConversationId } from '../../../shared/conversation-reference'
 import { isNativeConversationBusy, hasLiveNativeSession } from './busy'
 import type { ConversationSource, DispatchedMessage, DispatchOutcome, SourceConversation } from './source'
 import type { TranscriptLine } from './types'
-import type { TranscriptMessage } from '../../../shared/types/transcript'
+import type { TranscriptMessage, TranscriptProvenanceMetadata } from '../../../shared/types/transcript'
 
 const LOG_TAG = '[ConversationInterop]'
 
 export const CHAT_SOURCE_KIND = 'chat'
+
+/** A delivery that starts a turn says so, as a person's message would: the chat draws it on the reply it opened. */
+function asTurnOpener(record: DispatchedMessage['record']): TranscriptProvenanceMetadata {
+  return record.source === 'team-message' || record.source === 'cross-conversation'
+    ? { ...record.metadata, inputMode: 'turn' }
+    : record.metadata
+}
 
 async function dispatchBatch(
   spaceId: string,
@@ -49,7 +56,7 @@ async function dispatchBatch(
         const message = messages[opener]
         const stored = updateMessageById(spaceId, conversationId, messageId, {
           content: message.record.content, role: 'system', source: message.record.source,
-          metadata: { ...delivered.metadata, ...message.record.metadata, ...(message.record.source === 'team-message' ? { inputMode: 'turn' as const } : {}) },
+          metadata: { ...delivered.metadata, ...asTurnOpener(message.record) },
         })
         if (!stored) {
           console.warn(`${LOG_TAG} delivery patch missed: conversation=${conversationId} message=${messageId} reason=record-not-updated`)
@@ -62,7 +69,7 @@ async function dispatchBatch(
           if (index === opener || item.inputRecorded) return
           const additional = addMessage(spaceId, conversationId, {
             role: 'system', content: item.record.content, source: item.record.source,
-            metadata: item.record.source === 'team-message' ? { ...item.record.metadata, inputMode: 'turn' } : item.record.metadata,
+            metadata: asTurnOpener(item.record),
           })
           records.push(additional)
           outcomes[index] = { messageId: additional.id }

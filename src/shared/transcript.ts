@@ -46,6 +46,11 @@ export function isTeamTranscriptMessage(message: TranscriptMessage): boolean {
   return message.role === 'system' && message.source === 'team-message' && !!message.metadata?.teamId
 }
 
+/** Another conversation's delivery; without its source it stays an ordinary system message. */
+export function isCrossConversationTranscriptMessage(message: TranscriptMessage): boolean {
+  return message.role === 'system' && message.source === 'cross-conversation' && !!message.metadata?.fromConversationId
+}
+
 /**
  * A wake the runtime writes to a lead (a turn-end report, a periodic check):
  * read by the model only. People follow the same state on the team bar.

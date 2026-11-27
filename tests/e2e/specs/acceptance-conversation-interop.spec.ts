@@ -176,21 +176,20 @@ for (const recipient of ['visible', 'cached-background', 'unopened'] as const) {
       sending.release()
       await expect.poll(working.started, { timeout: 30000 }).toBe(true)
       if (recipient !== 'visible') await openInteropConversation(window, target.title)
-      const sourceLabel = window.getByText(`From @${sender.title}:`, { exact: true })
+      // The delivery opened the turn: it is named on the running reply's sender line, with its summary.
+      const sourceLabel = window.getByText(`Received a message from “${sender.title}”`, { exact: true })
       await expect(sourceLabel).toBeVisible()
       await expect(window.getByText(summary, { exact: true })).toBeVisible()
       const stored = await readAcceptanceConversation(window, 'halo-temp', target.id)
       const deliveries = stored.messages.filter(message => message.content === note)
       expect(deliveries).toHaveLength(1)
       const delivery = deliveries[0]
-      expect(delivery).toMatchObject({ role: 'system', source: 'cross-conversation', metadata: { fromConversationId: sender.id, fromConversationTitle: sender.title, summary } })
-      const card = window.locator(`[data-message-id="${delivery.id}"]`)
-      await expect(card).toHaveCount(1)
-      await expect(card.getByRole('button').first()).toHaveAttribute('aria-expanded', /^(true|false)$/)
-      await expect(card.locator('.border')).toHaveCount(0)
-      await expect(card).not.toContainText(/\bago\b/)
-      await expect(card.locator('time')).toHaveText(/\d{1,2}:\d{2}/)
-      expect(await card.locator('time').getAttribute('datetime')).toBe(new Date(delivery.timestamp).toISOString())
+      expect(delivery).toMatchObject({ role: 'system', source: 'cross-conversation', metadata: { fromConversationId: sender.id, fromConversationTitle: sender.title, summary, inputMode: 'turn' } })
+      const line = sourceLabel.locator('xpath=ancestor::button[1]')
+      await expect(sourceLabel).toHaveCount(1)
+      await expect(line).toHaveAttribute('aria-expanded', 'false')
+      await expect(line.locator('.border')).toHaveCount(0)
+      await expect(window.locator(`[data-message-id="${delivery.id}"]`)).toHaveCount(0)
       await expect.poll(async () => {
         const state = await window.evaluate(id => (window as unknown as { halo: HaloAPI }).halo.getSessionState(id), target.id)
         return (state.data as { isActive?: boolean })?.isActive
@@ -215,9 +214,10 @@ for (const recipient of ['visible', 'cached-background', 'unopened'] as const) {
         }
         await resizeFileWindow(acceptanceApp.app, window, 1200, 800)
       }
-      if (!await card.getByText(note, { exact: true }).isVisible()) await card.getByRole('button').first().click()
+      await line.click()
+      const card = window.locator(`[data-message-id="${delivery.id}"]`)
       await expect(card.getByText(note, { exact: true })).toBeVisible()
-      await expect(card.getByText("sent by that conversation's AI", { exact: true })).toBeVisible()
+      await expect(window.getByText("Sent by that conversation's AI, not by you", { exact: true })).toBeVisible()
       await card.getByRole('button', { name: sender.title, exact: true }).click()
       await expect(window.getByRole('banner').getByText(sender.title, { exact: true })).toBeVisible()
       await openInteropConversation(window, target.title)
@@ -228,7 +228,8 @@ for (const recipient of ['visible', 'cached-background', 'unopened'] as const) {
       await waitForAcceptanceIdle(window, sender.id)
       await openInteropConversation(window, sender.title)
       await openInteropConversation(window, target.title)
-      await expect(window.locator(`[data-message-id="${delivery.id}"]`)).toHaveCount(1)
+      // Settled, it stays on the reply it opened, drawn once.
+      await expect(sourceLabel).toHaveCount(1)
       const finished = await readAcceptanceConversation(window, 'halo-temp', target.id)
       expect(finished.messages.filter(message => message.content === note)).toEqual([delivery])
       expect(finished.messages.filter(message => message.role === 'user')).toEqual([])

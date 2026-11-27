@@ -4,6 +4,8 @@ import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../../src/renderer/i18n', () => ({ useTranslation: () => ({ t: (text: string) => `translated:${text}` }), getCurrentLanguage: () => 'en' }))
 vi.mock('../../../src/renderer/stores/chat.store', () => ({ holdOpenThoughts: () => () => {} }))
+// The received line's source lookup, reached through team-collab: not under test here.
+vi.mock('../../../src/renderer/components/chat/cross-conversation/useCrossConversationSources', () => ({ useCrossConversationSources: () => new Map() }))
 vi.mock('../../../src/renderer/components/chat/ArrivalCard', () => ({ ArrivalCard: () => null, arrivalIcon: () => () => null }))
 vi.mock('../../../src/renderer/components/chat/tool-result', () => ({ ToolResultViewer: () => null }))
 vi.mock('../../../src/renderer/components/chat/NestedToolTimeline', () => ({ NestedToolTimeline: () => null }))

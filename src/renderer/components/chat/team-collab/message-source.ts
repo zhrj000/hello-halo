@@ -9,8 +9,19 @@
  */
 
 import type { Message } from '../../../types'
-import { isTeamTranscriptMessage as isTeamMessage } from '../../../../shared/transcript'
+import { isCrossConversationTranscriptMessage, isTeamTranscriptMessage as isTeamMessage } from '../../../../shared/transcript'
 export { isTeamMessage }
+
+/**
+ * The received line a delivery is drawn on when no reply carries it: one per
+ * team, or per source conversation, for consecutive deliveries. Null for any
+ * other message.
+ */
+export function receivedLineKey(message: Message): string | null {
+  if (isTeamMessage(message)) return `team:${message.metadata!.teamId}`
+  if (isCrossConversationTranscriptMessage(message)) return `conversation:${message.metadata!.fromConversationId}`
+  return null
+}
 
 export interface TeamMessageProvenance {
   teamId: string

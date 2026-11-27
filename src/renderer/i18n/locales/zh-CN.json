@@ -4345,5 +4345,8 @@
   "Stop this reminder?": "停止这个提醒？",
   "It will not come back to this conversation again. To have it again, ask the digital human.": "它不会再回到这个对话。需要的话，再让数字人设一次。",
   "Reminder": "提醒",
-  "Once": "一次"
+  "Once": "一次",
+  "Received a message from “{{title}}”": "收到了「{{title}}」的消息",
+  "Sent by that conversation's AI, not by you": "由该对话的 AI 发送，而非您本人",
+  "One-way notice from a scheduled run, no reply possible": "来自定时运行的单向通知，无法回复"
 }

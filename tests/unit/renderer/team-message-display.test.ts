@@ -41,6 +41,12 @@ vi.mock('../../../src/renderer/components/chat/cross-conversation', () => ({
   isCrossConversationMessage: (message: { role: string; source?: string }) => message.role === 'system' && message.source === 'cross-conversation',
   isCrossConversationNotice: () => false,
 }))
+// The source as delivered: these tests hold no conversation list.
+vi.mock('../../../src/renderer/components/chat/cross-conversation/useCrossConversationSources', () => ({
+  useCrossConversationSources: (messages: Message[]) => new Map(messages.flatMap(message => message.metadata?.fromConversationId
+    ? [[message.id, { title: message.metadata.fromConversationTitle ?? '', summary: message.metadata.summary ?? '', fromRun: message.metadata.fromConversationId.startsWith('run:') }]]
+    : [])),
+}))
 
 import { MessageRow } from '../../../src/renderer/components/chat/MessageRow'
 import { TrailingArrivals } from '../../../src/renderer/components/chat/ArrivalCard'
@@ -67,6 +73,10 @@ const at = (seconds: number) => new Date(Date.UTC(2026, 9, 13, 10, 0, seconds)).
 const team = (fields: Partial<Message> = {}): Message => ({
   id: 'team-1', role: 'system', source: 'team-message', content: 'Report: tests pass\n\nDetails follow', timestamp: at(5),
   metadata: { teamId: 'team', teamName: 'Crew', fromMemberName: 'Reviewer', inputMode: 'turn' }, ...fields,
+})
+const fromConversation = (fields: Partial<Message> = {}): Message => ({
+  id: 'conv-1', role: 'system', source: 'cross-conversation', content: 'Which files did you change?\n\nList them all', timestamp: at(6),
+  metadata: { fromConversationId: 'c-avatar', fromConversationTitle: 'Team avatar perf', summary: 'Q: which files changed', inputMode: 'turn' }, ...fields,
 })
 const tool = (id: string, seconds: number): Thought => ({ id, type: 'tool_use', content: '', timestamp: at(seconds), toolName: 'Read' })
 
@@ -134,14 +144,59 @@ describe('a teammate message in the transcript', () => {
   })
 })
 
+describe('another conversation’s message in the transcript', () => {
+  it('that opened a reply’s turn is named on that reply’s sender line with its summary, collapsed', () => {
+    const reply: Message = { id: 'reply', role: 'assistant', content: 'Here they are', timestamp: at(30) }
+    const opener = fromConversation()
+    const line = nodes(row({ message: reply, openers: [opener], senderName: 'Halo' })).find(node => node.type === ReplyOpeners)
+    expect(line?.props?.openers).toEqual([opener])
+
+    const html = renderToStaticMarkup(createElement(ReplyOpeners, { senderName: 'Halo', openers: [opener] }))
+    expect(html).toContain('Halo')
+    expect(html).toContain('Received a message from “Team avatar perf”')
+    expect(html).toContain('Q: which files changed')
+    expect(html).toContain('aria-expanded="false"')
+    expect(html).not.toContain('List them all')
+  })
+
+  it('opens to its full text and says it was sent by that conversation’s AI — or by a run that cannot be answered', () => {
+    const opener = fromConversation()
+    const html = renderToStaticMarkup(createElement(ReplyOpeners, { openers: [opener], reveal: { messageId: opener.id } }))
+    expect(html).toContain(`data-message-id="${opener.id}"`)
+    expect(html).toContain('List them all')
+    expect(html).toContain('Sent by that conversation&#x27;s AI, not by you')
+
+    const notice = fromConversation({ metadata: { fromConversationId: 'run:daily', fromConversationTitle: 'Daily digest', summary: 'Digest ready' } })
+    const fromRun = renderToStaticMarkup(createElement(ReplyOpeners, { openers: [notice], reveal: { messageId: notice.id } }))
+    expect(fromRun).toContain('Received a message from “Daily digest”')
+    expect(fromRun).toContain('One-way notice from a scheduled run, no reply possible')
+  })
+
+  it('that no reply follows is the received line on its own, with no card', () => {
+    const message = fromConversation()
+    const tree = nodes(row({ message, senderName: 'Halo' }))
+    const line = tree.find(node => node.type === ReplyOpeners)
+    expect(line?.props?.openers).toEqual([message])
+    expect(line?.props?.senderName).toBe('Halo')
+  })
+
+  it('cuts a long title short and drops the summary when the line stands for several messages', () => {
+    const long = fromConversation({ metadata: { fromConversationId: 'c-long', fromConversationTitle: 'x'.repeat(60), summary: 'S' } })
+    expect(renderToStaticMarkup(createElement(ReplyOpeners, { openers: [long] }))).toContain(`“${'x'.repeat(24)}…”`)
+    const mixed = renderToStaticMarkup(createElement(ReplyOpeners, { openers: [team(), fromConversation()] }))
+    expect(mixed).toContain('Received 2 messages')
+    expect(mixed).not.toContain('Q: which files changed')
+  })
+})
+
 describe('arrivals drawn after a reply', () => {
-  it('read one team’s messages as one received line, while another conversation’s keeps its card', async () => {
+  it('read as one received line per team or source conversation, never a card', async () => {
     const actual = await vi.importActual<typeof import('../../../src/renderer/components/chat/ArrivalCard')>('../../../src/renderer/components/chat/ArrivalCard')
-    const other: Message = { id: 'other', role: 'system', source: 'cross-conversation', content: 'Hi', timestamp: at(8) }
-    const tree = nodes(actual.TrailingArrivals({ arrivals: [team(), team({ id: 'team-2', metadata: { teamId: 'team', teamName: 'Crew', fromMemberName: 'Scout' } }), other], senderName: 'Halo' }))
+    const unreadable: Message = { id: 'unreadable', role: 'system', source: 'cross-conversation', content: 'Hi', timestamp: at(8) }
+    const tree = nodes(actual.TrailingArrivals({ arrivals: [team(), team({ id: 'team-2', metadata: { teamId: 'team', teamName: 'Crew', fromMemberName: 'Scout' } }), fromConversation(), fromConversation({ id: 'conv-2' }), unreadable], senderName: 'Halo' }))
     const lines = tree.filter(node => node.type === ReplyOpeners)
-    expect(lines.map(node => (node.props?.openers as Message[]).map(message => message.id))).toEqual([['team-1', 'team-2']])
-    expect(lines[0].props?.senderName).toBe('Halo')
+    expect(lines.map(node => (node.props?.openers as Message[]).map(message => message.id))).toEqual([['team-1', 'team-2'], ['conv-1', 'conv-2']])
+    expect(lines.every(node => node.props?.senderName === 'Halo')).toBe(true)
     expect(tree.filter(node => node.type === TeamMemberMessage)).toEqual([])
   })
 })

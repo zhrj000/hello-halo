@@ -69,7 +69,8 @@ Queued work has no id until accepted by the source. The message storage format a
 source tags are unchanged.
 
 Space records carry optional presentation provenance in their existing JSON
-metadata: a team opener has `inputMode: 'turn'`, and every record accepted live
+metadata: a team or cross-conversation opener has `inputMode: 'turn'` (a
+digital-human source writes the same on a cross-conversation opener), and every record accepted live
 (team or cross-conversation) has `'live'`. A live record also carries
 `inputReplyId` only when the transcript still has an unfinished assistant
 placeholder at receipt, so a reload shows it inside the reply it arrived in. This names where the input arrived,

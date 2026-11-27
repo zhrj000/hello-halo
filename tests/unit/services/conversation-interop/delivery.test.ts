@@ -179,6 +179,8 @@ describe('deliverToConversation', () => {
       fromConversationTitle: 'Source Thread',
       summary: 'a short summary',
       forwardDepth: 0,
+      // It opened the turn, so the chat draws it on the reply it opened.
+      inputMode: 'turn',
     })
 
     // The model-facing text (what sendMessage actually received) carries the

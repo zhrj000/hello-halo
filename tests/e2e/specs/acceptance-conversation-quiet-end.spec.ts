@@ -69,7 +69,8 @@ test('a notice that needs no reply ends the recipient turn without an error or a
     for (const visit of ['after the notice', 'reopened']) {
       if (visit === 'reopened') await openConversation(window, sender.title)
       await openConversation(window, target.title)
-      await expect(window.locator(`[data-message-id="${delivery.id}"]`), visit).toContainText(`From @${sender.title}:`)
+      // No reply after it: the received line on its own.
+      await expect(window.getByText(`Received a message from “${sender.title}”`, { exact: true }), visit).toBeVisible()
       await expect(window.getByText('Model response interrupted', { exact: true }), visit).toHaveCount(0)
       await expect(window.getByText(/Unexpected empty response/), visit).toHaveCount(0)
       await expect(window.getByRole('button', { name: /^Work process/ }), visit).toHaveCount(0)

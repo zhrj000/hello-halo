@@ -142,6 +142,11 @@ function dispatchBatch(
   const fresh = messages.filter((message) => !message.inputRecorded)
   const recordedInputIds = messages.flatMap(message => message.recordedInputIds ?? [])
   const first = fresh[0] ?? messages[0]
+  // These open the turn, as a person's message would: the chat draws them on the reply they opened.
+  const opening = (record: DispatchedMessage['record']) => ({
+    source: record.source,
+    metadata: record.source === 'cross-conversation' ? { ...record.metadata, inputMode: 'turn' as const } : record.metadata,
+  })
   return new Promise((resolve, reject) => {
     let accepted = false
     const outcomes = messages.map(() => ({}))
@@ -152,11 +157,11 @@ function dispatchBatch(
       message: messages.map((message) => message.turnInput).join('\n\n'),
       recorded: {
         content: first.record.content,
-        provenance: { source: first.record.source, metadata: first.record.metadata },
+        provenance: opening(first.record),
       },
       recordedMessages: fresh.map((message) => ({
         content: message.record.content,
-        provenance: { source: message.record.source, metadata: message.record.metadata },
+        provenance: opening(message.record),
       })),
       ...(recordedInputIds.length ? { recordedInputIds } : {}),
       onMessageAccepted: () => {

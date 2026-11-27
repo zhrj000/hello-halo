@@ -4345,5 +4345,8 @@
   "Stop this reminder?": "このリマインダーを停止しますか？",
   "It will not come back to this conversation again. To have it again, ask the digital human.": "この会話には戻ってきません。必要なら、もう一度デジタルヒューマンに頼んでください。",
   "Reminder": "リマインダー",
-  "Once": "1回"
+  "Once": "1回",
+  "Received a message from “{{title}}”": "「{{title}}」からメッセージを受信しました",
+  "Sent by that conversation's AI, not by you": "自分ではなくその会話のAIが送信したもの",
+  "One-way notice from a scheduled run, no reply possible": "定期実行による一方向の通知のため、返信はできません"
 }

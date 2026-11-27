@@ -12,12 +12,11 @@ import { MessageItem } from './MessageItem'
 import { CollapsedThoughtProcess, LazyCollapsedThoughtProcess } from './CollapsedThoughtProcess'
 import { InjectionAnnotation } from './InjectionAnnotation'
 import {
-  CrossConversationMessage,
   CrossConversationNotice,
   isCrossConversationMessage,
   isCrossConversationNotice,
 } from './cross-conversation'
-import { ReplyOpeners, isTeamMessage, type OpenerReveal } from './team-collab'
+import { ReplyOpeners, receivedLineKey, type OpenerReveal } from './team-collab'
 import { TrailingArrivals } from './ArrivalCard'
 import { mergeArrivalThoughts, toArrivalThought } from './transcript'
 import { PushedMessageLabel, isPushedMessage } from './PushedMessageLabel'
@@ -70,8 +69,8 @@ export interface MessageRowProps {
   /** Reveal the reply's copy and token usage on hover only (every reply but the latest). */
   actionsOnHover?: boolean
 
-  /** Teammates' deliveries that started this reply (see transcript/transcript-rows); drawn on its sender line.
-   *  On a team message, the consecutive ones its line stands for. */
+  /** Teammates' or other conversations' deliveries that started this reply (see transcript/transcript-rows); drawn on its sender line.
+   *  On a delivery with no reply after it, the consecutive ones its line stands for. */
   openers?: Message[]
 
   /** Opens the openers to show one of them (a search or reference jump). */
@@ -139,13 +138,19 @@ export const MessageRow = memo(function MessageRow({
   // System-sourced rows are routed before the bubble branches below: MessageItem
   // only distinguishes user from assistant, so anything reaching it would be
   // dressed as one of the two. This is the only place that decision is made.
-  if (isCrossConversationMessage(message)) {
+  // No reply follows it: the line a reply would carry, on its own — one team's, or one other conversation's.
+  if (receivedLineKey(message) !== null) {
     return (
-      <div className={`pb-4 ${className}`}>
-        <CrossConversationMessage message={message} />
+      <div className={`pb-3 ${className}`}>
+        <div className="w-[85%]">
+          <ReplyOpeners senderName={senderName} openers={openers?.length ? openers : [message]} reveal={openerReveal} />
+        </div>
       </div>
     )
   }
+
+  // A delivery whose source cannot be read has nothing to show.
+  if (isCrossConversationMessage(message)) return null
 
   if (isCrossConversationNotice(message)) {
     return (
@@ -159,17 +164,6 @@ export const MessageRow = memo(function MessageRow({
     return (
       <div className={className}>
         <ContinuityNotice message={message} />
-      </div>
-    )
-  }
-
-  // No reply follows it: the line a reply would carry, on its own.
-  if (isTeamMessage(message)) {
-    return (
-      <div className={`pb-3 ${className}`}>
-        <div className="w-[85%]">
-          <ReplyOpeners senderName={senderName} openers={openers?.length ? openers : [message]} reveal={openerReveal} />
-        </div>
       </div>
     )
   }

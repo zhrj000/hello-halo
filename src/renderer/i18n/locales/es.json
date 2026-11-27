@@ -4549,5 +4549,8 @@
   "Stop this reminder?": "¿Detener este recordatorio?",
   "It will not come back to this conversation again. To have it again, ask the digital human.": "No volverá a esta conversación. Si la necesitas de nuevo, pídesela al humano digital.",
   "Reminder": "Recordatorio",
-  "Once": "Una vez"
+  "Once": "Una vez",
+  "Received a message from “{{title}}”": "Recibiste un mensaje de «{{title}}»",
+  "Sent by that conversation's AI, not by you": "Enviado por la IA de esa conversación, no por ti",
+  "One-way notice from a scheduled run, no reply possible": "Aviso unidireccional de una ejecución programada, no es posible responder"
 }

@@ -21,7 +21,7 @@ import { useRef, useMemo, useCallback, useState, forwardRef, useImperativeHandle
 import { readReminderTurn } from '../../../shared/apps/conversation-reminders'
 import type { ReactNode } from 'react'
 import { MessageRow } from './MessageRow'
-import { isTeamMessage, type OpenerReveal } from './team-collab'
+import { receivedLineKey, type OpenerReveal } from './team-collab'
 import { StreamingSection } from './StreamingSection'
 import { WorkViewMemoryProvider, useTranscriptWorkView } from './work-history/view-memory'
 import { withoutLiveInputs } from '../../utils/live-inputs'
@@ -197,17 +197,16 @@ const EMPTY_QUEUE: never[] = []
 const EMPTY_LIVE_INPUTS: LiveInput[] = []
 const EMPTY_ARRIVALS: Message[] = []
 
-/** Consecutive messages from one team read as one received line, drawn on the run's first row. */
-function continuesTeamRun(messages: readonly Message[], index: number): boolean {
-  const message = messages[index]
-  const previous = messages[index - 1]
-  return !!previous && isTeamMessage(message) && isTeamMessage(previous) && previous.metadata?.teamId === message.metadata?.teamId
+/** Consecutive messages from one team, or one other conversation, read as one received line, drawn on the run's first row. */
+function continuesReceivedRun(messages: readonly Message[], index: number): boolean {
+  const key = index > 0 ? receivedLineKey(messages[index]) : null
+  return key !== null && receivedLineKey(messages[index - 1]) === key
 }
 
-function teamRunFrom(messages: readonly Message[], index: number): Message[] | undefined {
-  if (!isTeamMessage(messages[index])) return undefined
+function receivedRunFrom(messages: readonly Message[], index: number): Message[] | undefined {
+  if (receivedLineKey(messages[index]) === null) return undefined
   let end = index + 1
-  while (end < messages.length && continuesTeamRun(messages, end)) end++
+  while (end < messages.length && continuesReceivedRun(messages, end)) end++
   return messages.slice(index, end)
 }
 
@@ -308,8 +307,8 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
         if (index >= 0) setOpenerReveal({ messageId })
       }
       if (index < 0) return false
-      if (isTeamMessage(displayMessagesRef.current[index])) {
-        while (continuesTeamRun(displayMessagesRef.current, index)) index--
+      if (receivedLineKey(displayMessagesRef.current[index]) !== null) {
+        while (continuesReceivedRun(displayMessagesRef.current, index)) index--
         setOpenerReveal({ messageId })
       }
       detach()
@@ -350,7 +349,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
       const key = rowKeys[index]
       if (index === liveStart) out.push(<div key="history-start" ref={sentinelRef} aria-hidden="true" />)
       if (index === liveEnd) out.push(<div key="history-end" ref={endSentinelRef} aria-hidden="true" />)
-      const continuesRun = index > start && continuesTeamRun(displayMessages, index)
+      const continuesRun = index > start && continuesReceivedRun(displayMessages, index)
       if (index < liveStart || index >= liveEnd) {
         out.push(
           <div
@@ -371,7 +370,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
         out.push(<div key={key} data-transcript-index={index} />)
         continue
       }
-      const rowOpeners = teamRunFrom(displayMessages, index) ?? openers.get(message.id)
+      const rowOpeners = receivedRunFrom(displayMessages, index) ?? openers.get(message.id)
       out.push(
         <div key={key} data-transcript-index={index} className={transcriptRowClass(message)}>
           <SegmentTime messages={displayMessages} index={index} className={contentWidthClass} />
@@ -391,7 +390,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
             openerReveal={openerReveal && rowOpeners?.some(m => m.id === openerReveal.messageId) ? openerReveal : undefined}
             actionsOnHover={index !== latestReply}
             className={contentWidthClass}
-            senderName={message.role === 'assistant' || isTeamMessage(message) ? senderName : undefined}
+            senderName={message.role === 'assistant' || receivedLineKey(message) !== null ? senderName : undefined}
             endingShownBelow={interruptedNoticeShown && index === latestReply}
             reminderRun={index > 0 && displayMessages[index - 1].role === 'user' && !!readReminderTurn(displayMessages[index - 1].content)}
           />
