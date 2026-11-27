@@ -1,5 +1,5 @@
 import { Fragment, memo, type ReactNode } from 'react'
-import { CheckCircle2, ChevronDown, ChevronRight, MinusCircle } from 'lucide-react'
+import { CheckCircle2, ChevronDown, ChevronRight, MinusCircle, Timer } from 'lucide-react'
 import type { TFunction } from 'i18next'
 import type { RosterMember, TeamConversation, TeamDetail } from '../../../../shared/apps/team-types'
 import { useTranslation } from '../../../i18n'
@@ -9,6 +9,7 @@ import { failureCause } from '../workbench/progress'
 import { failureCauseText, progressMemberName } from '../workbench/progress-labels'
 import { addressedMember } from './crew'
 import { taskState, type TaskFact, type TaskStateKey } from './status'
+import { describeRhythm } from '../check-format'
 
 const STATE_DOT: Partial<Record<TaskStateKey, string>> = {
   running: 'bg-primary',
@@ -143,7 +144,7 @@ type TaskRowProps = {
 function sameRow(previous: TaskRowProps, next: TaskRowProps): boolean {
   return previous.task === next.task && previous.selected === next.selected && previous.onOpen === next.onOpen
     && previous.detail.team === next.detail.team && previous.detail.roster === next.detail.roster
-    && previous.detail.pendingEscalations === next.detail.pendingEscalations
+    && previous.detail.pendingEscalations === next.detail.pendingEscalations && previous.detail.checks === next.detail.checks
 }
 
 /**
@@ -152,7 +153,7 @@ function sameRow(previous: TaskRowProps, next: TaskRowProps): boolean {
  * a row of small faces told little apart and crowded out the line above.
  */
 export const TaskRow = memo(function TaskRow({ detail, task, selected = false, onOpen }: TaskRowProps) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const state = taskState(detail, task)
   const title = taskTitle(detail, task, t)
   // Finished or quiet work says so by its icon and group; a summary already used as the title is not repeated.
@@ -162,15 +163,20 @@ export const TaskRow = memo(function TaskRow({ detail, task, selected = false, o
   const origin = task.kind === 'run' && (task.triggerType ?? 'manual') === 'manual' ? null : taskOrigin(detail, task, t)
   const subtasks = task.subtasks ? task.subtasks.done + task.subtasks.open : 0
   const time = formatTimeAgo(task.lastActivityAt, t)
+  // Between its runs, a task kept going by a periodic check says so in place of an idle or
+  // finished state: its last round's work being done does not finish the task while a check stands.
+  const checks = task.checkCount && (state.key === 'idle' || state.key === 'done') ? (detail.checks ?? []).filter(check => check.epochId === task.epochId) : []
+  const scheduled = checks.length ? [t('Periodic check'), describeRhythm(checks[0].schedule, t, i18n.language), t('Runs so far: {{n}}', { n: checks.reduce((sum, check) => sum + check.runCount, 0) })].join(' · ') : ''
   const counts = [
     task.artifactCount ? t('{{count}} outputs', { count: task.artifactCount }) : null,
-    subtasks && !(state.key === 'done' && task.artifactCount) ? t('{{done}}/{{total}} subtasks', { done: task.subtasks!.done, total: subtasks }) : null,
+    // One round's subtasks, all done, would read as the whole task finished.
+    subtasks && !scheduled && !(state.key === 'done' && task.artifactCount) ? t('{{done}}/{{total}} subtasks', { done: task.subtasks!.done, total: subtasks }) : null,
   ].filter(Boolean).join(' · ')
-  const line = [origin, fact, counts, time].filter(Boolean).join(' · ')
+  const line = [origin, scheduled, fact, counts, time].filter(Boolean).join(' · ')
   const tone = state.fact.kind === 'stalled' ? 'text-muted-foreground' : STATE_TONE[state.key] ?? ''
-  const parts = [origin, fact && <span className={tone}>{fact}</span>, counts].filter(Boolean)
+  const parts = [origin, scheduled, fact && <span className={tone}>{fact}</span>, counts].filter(Boolean)
   return <button onClick={() => onOpen(task.epochId)} aria-current={selected ? 'true' : undefined} className={`task-row relative -mx-3 flex w-[calc(100%+24px)] items-center gap-3 rounded-[10px] px-3 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${selected ? 'bg-secondary' : 'hover:bg-secondary/60'}`}>
-    <StateIcon state={state.key} ended={state.fact.kind === 'ended'} />
+    {scheduled ? <span className="grid size-[18px] shrink-0 place-items-center text-subtle-foreground" aria-hidden="true"><Timer size={14} strokeWidth={1.8} /></span> : <StateIcon state={state.key} ended={state.fact.kind === 'ended'} />}
     <span className="min-w-0 flex-1">
       <span className="block truncate text-[13.5px] font-medium text-foreground">{title}</span>
       <span title={line} className="mt-px block truncate text-xs text-subtle-foreground">
@@ -179,6 +185,8 @@ export const TaskRow = memo(function TaskRow({ detail, task, selected = false, o
         <span className="sm:hidden">{parts.length > 0 && ' · '}{time}</span>
       </span>
     </span>
+    {/* A static mark: this task has periodic checks standing in it. */}
+    {!!task.checkCount && !scheduled && <span role="img" aria-label={t('Periodic checks: {{n}}', { n: task.checkCount })} className="shrink-0 text-faint-foreground"><Timer size={12} strokeWidth={1.8} aria-hidden="true" /></span>}
     <span className="hidden min-w-[4.5rem] shrink-0 whitespace-nowrap text-right text-xs tabular-nums text-faint-foreground sm:block">{time}</span>
   </button>
 }, sameRow)

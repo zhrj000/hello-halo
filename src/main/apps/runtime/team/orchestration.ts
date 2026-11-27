@@ -211,8 +211,12 @@ export interface Orchestration {
   renameConversationEpoch(teamId: string, epochId: string, title: string | null): void
   /** Return the newly saved title, if the person's message named this native conversation. */
   maybeAutoNameConversation(teamId: string, epochId: string, fromHuman: boolean, message: string): string | undefined
-  /** Record activity and resume an execution scope. Only a human request may reopen archived work. */
-  noteEpochTurn(teamId: string, epochId: string, fromHuman?: boolean): boolean
+  /**
+   * Record activity and resume an execution scope. Only a human request may reopen archived work.
+   * `ambient` is a periodic check's wake: it still runs the turn but is not activity a person
+   * would read as the work having moved, so it does not restamp the recency a list is ordered by.
+   */
+  noteEpochTurn(teamId: string, epochId: string, fromHuman?: boolean, options?: { ambient?: boolean }): boolean
   closeEpochResources(teamId: string, epochId: string, options?: { disposing?: boolean }): Promise<void>
   sealEpoch(teamId: string, endReason: EpochEndReason, summary?: string | null): Promise<void>
   /** Seal a single conversation epoch (e.g. an IM chat cleared by the user). */
@@ -261,6 +265,8 @@ export interface Orchestration {
    * the ledger write being reported, never before.
    */
   noteMemberStatusChanged(teamId: string, appId?: string): void
+  /** A periodic check was set, run or stopped: boards and lists show how many stand where. */
+  noteChecksChanged(teamId: string): void
   /**
    * Re-derive whether a member owned by THIS machine still owes its own person
    * an answer, and share the result with the office. Idempotent and safe to call
@@ -1630,14 +1636,15 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     return closing
   }
 
-  function noteEpochTurn(teamId: string, epochId: string, fromHuman = false): boolean {
+  function noteEpochTurn(teamId: string, epochId: string, fromHuman = false, options?: { ambient?: boolean }): boolean {
     const epoch = store.getEpochById(epochId)
     if (!epoch || epoch.teamId !== teamId) return false
     if (closingEpochs.has(epochId) || epoch.endReason === 'cleared' || (epoch.workItem?.status === 'completed' && !fromHuman)) {
       console.warn(`${LOG_TAG} Rejected turn for closed task: team=${teamId} epoch=${epochId}`)
       return false
     }
-    store.touchEpoch(epochId, Date.now())
+    // An hourly check would otherwise pull its conversation to the top of every list, every hour.
+    if (!options?.ambient) store.touchEpoch(epochId, Date.now())
     // A run a person has written into joins their conversations from then on,
     // on every node: the stamp travels with the epoch row.
     if (fromHuman && epoch.lifecycle === 'run' && store.markRunHumanTurn(epochId, Date.now())) {
@@ -2101,6 +2108,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     getMemberBusy,
     getActiveEpochIds,
     noteMemberStatusChanged: notifyMemberStatusChanged,
+    noteChecksChanged: (teamId: string) => emitTeamUpdated(teamId, ['board', 'conversations']),
     reconcileAwaitingDecision,
     resumeFromEscalation,
   }

@@ -215,7 +215,7 @@ test.describe('Task workbench interaction', () => {
   test('a new team conversation opens without task onboarding', { annotation: { type: 'acceptance', description: JSON.stringify({ caseId: 'teams.tasks.conversation-entry', evidence: 'ui', mode: 'none', variant: { entry: 'desktop', width: 'wide' } }) } }, async ({ electronApp, window }) => {
     await openTeamWorkbench(electronApp, window, { allowCreate: true })
     await openHomepageTeam(window)
-    await window.getByRole('button', { name: 'New team conversation', exact: true }).click()
+    await window.getByRole('button', { name: 'Start task', exact: true }).click()
     const room = window.getByRole('region', { name: 'Conversation', exact: true })
     await expect(room.getByRole('heading', { name: 'New conversation', exact: true })).toBeVisible()
     await expect(taskMemberRail(window).locator('[aria-pressed="true"]')).toHaveAccessibleName(/^Lead( · |$)/)

@@ -243,7 +243,7 @@ function LegacyTeamView({ detail: teamDetail, onBack, spaceEntry = false }: { de
             }
           }
           finally { setRunningAction(false) }
-        }} className="flex items-center gap-1 rounded-lg border border-border px-3 py-2 text-xs"><Play size={14} />{detail.team.goal.trim() ? t('Run') : t('New task')}</button>
+        }} className="flex items-center gap-1 rounded-lg border border-border px-3 py-2 text-xs"><Play size={14} />{detail.team.goal.trim() ? t('Run') : t('Start task')}</button>
         {teamDetail.team.currentEpochId && <button disabled={runningAction} onClick={async () => {
           setRunningAction(true)
           try { await useTeamStore.getState().pauseTeam(detail.team.id) }

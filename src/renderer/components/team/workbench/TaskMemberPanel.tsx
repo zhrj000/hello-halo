@@ -68,7 +68,7 @@ export function TaskMemberPanel({ members, selectedAppId, owned, waiting, workin
   })
   const groups = [
     { key: 'attention', title: t('Needs your attention'), members: take(member => waiting.has(member.appId) || progressOf.get(member.appId)?.state === 'failed') },
-    { key: 'working', title: t('Working'), members: take(member => working.has(member.appId)) },
+    { key: 'working', title: t('Working'), members: take(member => working.has(member.appId) && member.presence !== 'offline') },
     { key: 'mine', title: temporary ? t('Members') : t('My digital humans'), members: take(member => owned.has(member.appId)) },
     { key: 'rest', title: t('Other members · Read-only'), members: take(() => true) },
   ].filter(group => group.members.length)
@@ -81,6 +81,8 @@ export function TaskMemberPanel({ members, selectedAppId, owned, waiting, workin
     const row = progressOf.get(member.appId)
     if (row?.state === 'waiting') return { text: memberProgressText(row, members, t), tone: 'text-halo-warning' }
     if (row?.state === 'failed') return { text: memberProgressText(row, members, t), tone: 'text-destructive' }
+    // Whatever it was doing is stale once its owner's computer is gone.
+    if (member.presence === 'offline') return { text: [t('Offline'), member.owner].filter(Boolean).join(' · ') }
     if (row?.state === 'working') return { text: memberProgressText(row, members, t) }
     if (member.appId === selectedAppId) return { text: t('Current') }
     if (!owned.has(member.appId)) return { text: member.owner ?? t('Read-only') }
@@ -129,14 +131,14 @@ export function TaskMemberPanel({ members, selectedAppId, owned, waiting, workin
           const answer = row?.state === 'waiting' && row.decisionId ? row.decisionId : null
           const view = row?.state === 'failed' && row.activityId ? row.activityId : null
           const dot = waiting.has(member.appId) || row?.state === 'waiting' ? 'waiting' : row?.state === 'failed' ? 'failed'
-            : row?.state === 'working' || working.has(member.appId) ? 'working' : null
+            : member.presence !== 'offline' && (row?.state === 'working' || working.has(member.appId)) ? 'working' : null
           return <div key={member.appId} data-active={index === current} onPointerMove={() => { if (index !== current) setActive(index) }}
             className={`flex h-10 items-center gap-2 rounded-[9px] pr-2 ${selected ? 'bg-secondary' : index === current ? 'bg-secondary/60' : ''}`}>
             <button type="button" tabIndex={-1} aria-current={selected || undefined} onClick={() => onPick(member)}
               className="flex min-w-0 flex-1 items-center gap-2.5 self-stretch pl-2.5 text-left focus:outline-none">
-              <span className="relative flex shrink-0">
+              <span className={`relative flex shrink-0 ${member.presence === 'offline' ? 'opacity-50' : ''}`}>
                 <AutomationAvatar name={member.memberName} size={24} />
-                {readOnly && <i aria-hidden="true" className="avatar-lock-badge"><Lock strokeWidth={3} /></i>}
+                {readOnly && <i aria-hidden="true" data-lock="" className="absolute inset-0 flex items-center justify-center rounded-full bg-black/[.28] text-white"><Lock strokeWidth={3} className="h-[46%] w-[46%] drop-shadow-sm" /></i>}
                 {dot && <i aria-hidden="true" data-tone={dot} className="avatar-status-dot" />}
               </span>
               <span className={`max-w-[70%] shrink-0 truncate text-[13.5px] text-foreground ${selected ? 'font-semibold' : ''}`}>{member.memberName}</span>

@@ -17,7 +17,7 @@
 import { randomUUID } from 'crypto'
 import type { RunOutcome, Schedule, SchedulerJob, SchedulerService } from '../../../platform/scheduler'
 import { computeNextRun, parseEveryString } from '../../../platform/scheduler'
-import type { ReminderSchedule } from '../../../../shared/apps/conversation-reminders'
+import { REMINDER_TURN_PREFIX, type ReminderSchedule } from '../../../../shared/apps/conversation-reminders'
 import { parseAppChatKey } from '../../../../shared/apps/im-keys'
 import { formatLocalTime } from '../local-time'
 
@@ -220,7 +220,7 @@ export function renderReminderTurn(reminder: ConversationReminder, dueAt: number
   const late = nowMs - dueAt > 5 * 60 * 1000 ? `, delivered late at ${formatLocalTime(nowMs)}` : ''
   const folded = missed > 0 ? `; it came due ${missed} more time${missed === 1 ? '' : 's'} while this conversation was busy` : ''
   const askedBy = reminder.setBy ? ` at the request of ${reminder.setBy.name}` : ''
-  return `[Reminder you set in this conversation${askedBy} on ${formatLocalTime(reminder.createdAt)} · due ${formatLocalTime(dueAt)}${late}${folded}]\n\n${reminder.message}`
+  return `${REMINDER_TURN_PREFIX}${askedBy} on ${formatLocalTime(reminder.createdAt)} · due ${formatLocalTime(dueAt)}${late}${folded}]\n\n${reminder.message}`
 }
 
 export function createConversationReminders(deps: ConversationRemindersDeps): ConversationReminders {

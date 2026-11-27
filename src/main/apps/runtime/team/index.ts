@@ -275,7 +275,7 @@ export interface TeamRuntime {
   /** Return the newly saved title, if the person's message named this native conversation. */
   maybeAutoNameConversation(teamId: string, epochId: string, fromHuman: boolean, message: string): string | undefined
   /** A turn is entering this epoch: stamp its activity, and wake it if hibernated. */
-  noteEpochTurn(teamId: string, epochId: string, fromHuman?: boolean): boolean
+  noteEpochTurn(teamId: string, epochId: string, fromHuman?: boolean, options?: { ambient?: boolean }): boolean
   /** Release a deleting scope's local resources without changing its business history; caller closes descendants first. */
   closeEpochResources(teamId: string, epochId: string): Promise<void>
   /** Tear down a replicated closed task locally without publishing another epoch. */
@@ -560,7 +560,11 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     scheduler: deps.scheduler ?? null,
     wake: (params) => orchestration!.wakeForCheck(params),
     ...(deps.publishCheck ? { publish: deps.publishCheck } : {}),
-    ...(deps.onChecksChanged ? { onChanged: deps.onChecksChanged } : {}),
+    onChanged: (teamId) => {
+      // Lists and boards show how many checks stand where, so they re-read when one is set, run or stopped.
+      orchestration?.noteChecksChanged(teamId)
+      deps.onChecksChanged?.(teamId)
+    },
     ...(deps.checkMemberReachable ? { isReachable: deps.checkMemberReachable } : {}),
   })
 
@@ -679,7 +683,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
       orchestration!.renameConversationEpoch(teamId, epochId, title),
     maybeAutoNameConversation: (teamId, epochId, fromHuman, message) =>
       orchestration!.maybeAutoNameConversation(teamId, epochId, fromHuman, message),
-    noteEpochTurn: (teamId, epochId, fromHuman) => orchestration!.noteEpochTurn(teamId, epochId, fromHuman),
+    noteEpochTurn: (teamId, epochId, fromHuman, options) => orchestration!.noteEpochTurn(teamId, epochId, fromHuman, options),
     closeEpochResources: async (teamId, epochId) => {
       store.recipientFences.clearEpoch(teamId, epochId)
       checks?.clearEpoch(teamId, epochId, { replicate: false })

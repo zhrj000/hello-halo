@@ -205,8 +205,34 @@ export function finalReplyText(messages: readonly Message[]): string | undefined
     && message.metadata?.teamTriggerKind !== 'periodic_check' && message.content.trim())?.content.trim()
 }
 
+/** A reply a periodic check woke the member to write, rather than something said in the conversation. */
+export function isCheckRun(message: Message): boolean {
+  return message.role === 'assistant' && message.metadata?.teamTriggerKind === 'periodic_check'
+}
+
+/**
+ * A run that went through. A failed one is drawn as the reply it is, never as a line that
+ * has to be opened to be found.
+ */
+export function isFoldableCheckRun(message: Message): boolean {
+  return isCheckRun(message) && !message.error
+}
+
+/**
+ * A reply to a periodic check that is drawn as one quiet line of its own. One that carries
+ * messages the member handed on keeps its full row, as does a failed one (see isFoldableCheckRun).
+ */
+export function isCheckRunRow(row: ConversationRow): boolean {
+  return !!row.message && isFoldableCheckRun(row.message) && !row.openers?.length && !row.dispatches?.length && !row.received?.length
+}
+
+/** What a member told the person with report_to_user: the deliverable of a turn, not a team exchange. */
+export function isReportActivity(activity: TeamActivity): boolean {
+  return activity.kind === 'finding' && activity.id.startsWith('report:')
+}
+
 export type ConversationRow =
-  | { id: string; message: Message; openers?: TeamActivity[]; dispatches?: TeamActivity[]; activities?: never; decision?: never; sharedDecision?: never; additions?: never }
+  | { id: string; message: Message; openers?: TeamActivity[]; dispatches?: TeamActivity[]; received?: TeamActivity[]; reports?: TeamActivity[]; activities?: never; decision?: never; sharedDecision?: never; additions?: never }
   | { id: string; activities: TeamActivity[]; message?: never; decision?: never; sharedDecision?: never; additions?: never }
   | { id: string; decision: ActivityEntry; message?: never; activities?: never; sharedDecision?: never; additions?: never }
   | { id: string; sharedDecision: SharedTaskDecision; message?: never; activities?: never; decision?: never; additions?: never }
@@ -268,16 +294,19 @@ function looseAdditions(messages: Message[], conversation: readonly Message[]): 
   return messages.filter(message => message.source === 'injection' && !carried.has(message))
 }
 
-/** Deliveries a shown reply already draws in its work, by the request id their activity shares. */
-function carriedDeliveries(messages: Message[], conversation: readonly Message[]): Set<string> {
+/** Deliveries each shown reply already draws in its work, by the request id their activity shares. */
+function carriedByReply(messages: Message[], conversation: readonly Message[]): Map<string, Set<string>> {
   const carriers = inputsByReply(messages)
-  const ids = new Set<string>()
+  const byReply = new Map<string, Set<string>>()
   for (const message of conversation) {
     for (const arrival of carriers.get(message.id)?.arrivals ?? []) {
-      if (arrival.metadata?.correlationId) ids.add(arrival.metadata.correlationId)
+      if (!arrival.metadata?.correlationId) continue
+      const ids = byReply.get(message.id) ?? new Set<string>()
+      ids.add(arrival.metadata.correlationId)
+      byReply.set(message.id, ids)
     }
   }
-  return ids
+  return byReply
 }
 
 /**
@@ -289,7 +318,8 @@ function carriedDeliveries(messages: Message[], conversation: readonly Message[]
 export function taskConversationRows(messages: Message[], activities: TeamActivity[], epochId: string | null, appId?: string, decisions: ActivityEntry[] = [], { compact = false, sharedDecisions: withShared = true }: { compact?: boolean; sharedDecisions?: boolean } = {}): ConversationRow[] {
   const sharedDecisions = withShared ? sharedTaskDecisions(activities, epochId, appId, new Set(decisions.map(decision => decision.id))) : []
   const conversation = compact ? homepageMessages(messages) : conversationMessages(messages)
-  const carried = compact ? carriedDeliveries(messages, conversation) : new Set<string>()
+  const carriedBy = compact ? carriedByReply(messages, conversation) : new Map<string, Set<string>>()
+  const carried = new Set([...carriedBy.values()].flatMap(ids => [...ids]))
   const entries: Array<{
     id: string
     at: number | null
@@ -304,12 +334,12 @@ export function taskConversationRows(messages: Message[], activities: TeamActivi
     ...decisions.map(decision => ({ id: `decision:${decision.id}`, at: taskTime(decision.ts), decision, message: undefined, activity: undefined })),
     ...sharedDecisions.map(sharedDecision => ({ id: `shared-decision:${sharedDecision.refId}`, at: taskTime(sharedDecision.requestedAt), sharedDecision })),
     ...[...new Map(activities.map(activity => [activity.id, activity])).values()]
-      .filter(activity => appId && epochId && activity.epochId === epochId &&
+      .filter(activity => appId && epochId && activity.epochId === epochId && (compact && isReportActivity(activity) && activity.actorAppId === appId ||
         (activity.kind === 'message' || activity.kind === 'reply') && activity.targetAppId &&
         activity.actorAppId !== activity.targetAppId &&
         (activity.actorAppId === appId || activity.targetAppId === appId) &&
         (activity.subject.trim() || activity.body?.trim()) && !(compact && activityLevel(activity) === 'attention') &&
-        !(activity.targetAppId === appId && activity.correlationId && carried.has(activity.correlationId)))
+        !(activity.targetAppId === appId && activity.correlationId && carried.has(activity.correlationId))))
       .map(activity => ({ id: `activity:${activity.id}`, at: taskTime(activity.createdAt), activity, message: undefined, decision: undefined })),
   ].sort((a, b) => compareTaskTimes(a.at, b.at) || a.id.localeCompare(b.id))
   const rows: ConversationRow[] = []
@@ -328,7 +358,26 @@ export function taskConversationRows(messages: Message[], activities: TeamActivi
     }
   }
   const withOpeners = attachOpeners(rows, appId)
-  return compact ? attachDispatches(withOpeners, appId) : withOpeners
+  if (!compact) return withOpeners
+  return attachReceived(attachDispatches(withOpeners, appId), activities, carriedBy, epochId, appId)
+}
+
+/**
+ * What a reply received while it ran is drawn in its work, which is folded; the same
+ * messages are named again beside what the reply sent, so an exchange a member had
+ * mid-turn reads as one, in both directions, without opening anything.
+ */
+function attachReceived(rows: ConversationRow[], activities: TeamActivity[], carriedBy: Map<string, Set<string>>, epochId: string | null, appId?: string): ConversationRow[] {
+  if (!appId || !epochId || !carriedBy.size) return rows
+  const incoming = [...new Map(activities.map(activity => [activity.id, activity])).values()]
+    .filter(activity => activity.epochId === epochId && activity.targetAppId === appId && activity.actorAppId !== appId
+      && (activity.kind === 'message' || activity.kind === 'reply') && !!activity.correlationId && activityLevel(activity) !== 'attention')
+    .sort((a, b) => compareTaskTimes(taskTime(a.createdAt), taskTime(b.createdAt)))
+  return rows.map(row => {
+    const ids = row.message && carriedBy.get(row.message.id)
+    const received = ids ? incoming.filter(activity => ids.has(activity.correlationId!)) : []
+    return received.length ? { ...row, received } as ConversationRow : row
+  })
 }
 
 /**
@@ -341,10 +390,12 @@ function attachDispatches(rows: ConversationRow[], appId?: string): Conversation
   const result: ConversationRow[] = []
   let reply: Extract<ConversationRow, { message: Message }> | null = null
   let pending: TeamActivity[] = []
+  let pendingReports: TeamActivity[] = []
   rows.forEach((row, index) => {
     if (row.message) {
-      reply = row.message.role === 'assistant' ? { ...row, ...(pending.length ? { dispatches: pending } : {}) } : null
+      reply = row.message.role === 'assistant' ? { ...row, ...(pending.length ? { dispatches: pending } : {}), ...(pendingReports.length ? { reports: pendingReports } : {}) } : null
       pending = []
+      pendingReports = []
       result.push(reply ?? row)
       return
     }
@@ -357,9 +408,12 @@ function attachDispatches(rows: ConversationRow[], appId?: string): Conversation
       return
     }
     const dispatched = row.activities.filter(activity => activity.kind === 'message' && activity.actorAppId === appId && activityLevel(activity) !== 'attention')
-    if (replyFollows) pending.push(...dispatched)
-    else if (dispatched.length && reply) reply.dispatches = [...(reply.dispatches ?? []), ...dispatched]
-    const rest = row.activities.filter(activity => !dispatched.includes(activity))
+    const reported = row.activities.filter(activity => isReportActivity(activity) && activity.actorAppId === appId)
+    if (replyFollows) { pending.push(...dispatched); pendingReports.push(...reported) } else if (reply) {
+      if (dispatched.length) reply.dispatches = [...(reply.dispatches ?? []), ...dispatched]
+      if (reported.length) reply.reports = [...(reply.reports ?? []), ...reported]
+    }
+    const rest = row.activities.filter(activity => !dispatched.includes(activity) && !reported.includes(activity))
     if (rest.length) result.push({ id: row.id, activities: rest })
   })
   return result

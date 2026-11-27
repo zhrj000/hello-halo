@@ -13,6 +13,11 @@
  * Above the duty sits what the digital human is in its own right, so the panel
  * answers "who is this" before "what does it do here" — without it, a reader
  * who never opens the Digital Humans screen only ever sees an assignment.
+ *
+ * `readOnly` is the same panel for the team progress canvas: everything is shown,
+ * nothing about the member is edited there (that stays on the team details page);
+ * only a periodic check can still be stopped, since a runaway one is what a reader
+ * most often needs to act on.
  */
 
 import { useEffect, useState } from 'react'
@@ -41,9 +46,13 @@ interface TeamMemberSettingsProps {
   onBack: () => void
   /** Only the body, for a host that supplies its own header and scrolling. */
   embedded?: boolean
+  /** Shown, not edited: the team progress canvas's member profile. */
+  readOnly?: boolean
+  /** Read-only, where its "change these on the team details page" leads. */
+  onManage?: () => void
 }
 
-export function TeamMemberSettings({ detail, member, onBack, embedded = false }: TeamMemberSettingsProps) {
+export function TeamMemberSettings({ detail, member, onBack, embedded = false, readOnly = false, onManage }: TeamMemberSettingsProps) {
   const { t } = useTranslation()
   const updateMember = useTeamStore(s => s.updateMember)
   const setCurrentTab = useAppsPageStore(s => s.setCurrentTab)
@@ -93,7 +102,7 @@ export function TeamMemberSettings({ detail, member, onBack, embedded = false }:
         <h3 className="text-sm font-medium text-foreground">
           {t('Duty in this team')}
         </h3>
-        {isMine ? (
+        {isMine && !readOnly ? (
           <SystemPromptEditor
             value={duty}
             onChange={setDuty}
@@ -113,9 +122,9 @@ export function TeamMemberSettings({ detail, member, onBack, embedded = false }:
             <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">
               {member.duty?.trim() || t('Nothing written yet.')}
             </p>
-            <p className="mt-2 text-xs text-muted-foreground">
+            {!isMine && <p className="mt-2 text-xs text-muted-foreground">
               {t('{{owner}} wrote this for their digital human.', { owner: ownerName })}
-            </p>
+            </p>}
           </div>
         )}
         <p className="text-xs text-muted-foreground/60">
@@ -125,7 +134,7 @@ export function TeamMemberSettings({ detail, member, onBack, embedded = false }:
 
       {isMine && systemPrompt && <OwnInstructions prompt={systemPrompt} />}
 
-      {isMine && <DelegatedCapabilities teamId={detail.team.id} member={member} />}
+      {isMine && <DelegatedCapabilities teamId={detail.team.id} member={member} readOnly={readOnly} onManage={onManage} />}
 
       {isMine && <BorrowedWorkRecord teamId={detail.team.id} member={member} />}
 
@@ -381,7 +390,7 @@ function BorrowedWorkRecord({ teamId, member }: { teamId: string; member: TeamMe
  * the owner's machine reads it for such a request — so a switch that shows on
  * is on for them, and one that shows off is off.
  */
-function DelegatedCapabilities({ teamId, member }: { teamId: string; member: TeamMember }) {
+function DelegatedCapabilities({ teamId, member, readOnly = false, onManage }: { teamId: string; member: TeamMember; readOnly?: boolean; onManage?: () => void }) {
   const { t } = useTranslation()
   const updateMember = useTeamStore(s => s.updateMember)
   const app = useAppsStore(s => s.apps.find(a => a.id === member.appId))
@@ -418,7 +427,7 @@ function DelegatedCapabilities({ teamId, member }: { teamId: string; member: Tea
   const inventory = items ? inventoryOf(items) : null
   const view = inventory ? delegatedPolicyView(saved, inventory) : null
   const save = (next: TeamDelegatedPolicy) => {
-    if (!inventory) return
+    if (!inventory || readOnly) return
     const toSave = delegatedPolicyToSave(next, inventory)
     setSaved(toSave)
     void updateMember(teamId, appId, { delegatedPolicy: toSave })
@@ -459,6 +468,14 @@ function DelegatedCapabilities({ teamId, member }: { teamId: string; member: Tea
             </div>
           ) : (
             <>
+            {/* Outside the disabled fieldset, so the way to change these stays a working link. */}
+            {readOnly && (onManage
+              ? <button onClick={onManage} className="inline-flex items-center gap-1 rounded text-xs text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
+                {t('Change these on the team details page')}<span aria-hidden="true">↗</span>
+              </button>
+              : <p className="text-xs text-muted-foreground">{t('Change these on the team details page')}</p>)}
+            {/* Read-only, every switch and field is disabled in place, so the reader sees exactly what is lent. */}
+            <fieldset disabled={readOnly} className="min-w-0 space-y-3 disabled:[&_button]:cursor-default disabled:[&_label]:cursor-default">
               {view.unset && (
                 <p className="rounded-lg border border-border bg-secondary/40 px-3 py-2 text-xs text-foreground">
                   {t('Not set separately yet: people on other computers can use everything it can do.')}
@@ -490,6 +507,7 @@ function DelegatedCapabilities({ teamId, member }: { teamId: string; member: Tea
                   />
                 </label>
               </div>
+            </fieldset>
             </>
           )}
         </div>

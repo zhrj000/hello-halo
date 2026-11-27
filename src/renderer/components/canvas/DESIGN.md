@@ -286,11 +286,28 @@ every subtask is done or rejected with nobody still working, waiting or failed
 (`taskProgress().finished`); a new message or subtask turns it back to in progress.
 The members page lists the whole roster, each with its concrete work here (the
 task in hand or next, what it finished, the work it split out); members outside
-this conversation are listed last; the others switch the chat to them, as a subtask
-does.
+this conversation are listed after the rest, and those whose owner's computer is offline
+last, in an "Offline" group of greyed faces with no stale work dot, reading "Offline · owner"
+as the member selector does (a question for the user or a failure keeps its own group). Every member, in this conversation or not, opens
+its profile one step further in ("← Members" back to the list where it was left): its
+state here (the list's wording, not its state across the team, which the team page
+shows), then the team page's own member settings (`TeamMemberSettings` with `readOnly`,
+so the two never drift): what the digital human is, its duty, its own instructions,
+what others can ask it to do (switches shown disabled), what it has been asked to do,
+and its periodic checks, which alone can still be stopped here; the tasks it is in are
+not listed. A temporary team's collaborator has no member row and shows its duty only. The profile's action
+switches the chat to a member in this conversation, as a subtask does, or starts a
+chat with one of the user's own members outside it; editing a member stays on the team
+page, which "Manage in team details" opens at that member: a quiet link at the right of
+the profile's header, seen on arrival rather than below the long page (not pinned to the
+bottom: it is a secondary way out, and the top bar already holds the profile's action),
+and again as the link reading "Change these on the team details page" over the disabled
+switches, where wanting to change them arises (never for a temporary team, which has no
+team page).
 `reveal.activityId` opens the collaboration record at that record;
-`reveal.memberAppId` opens that member's execution. The page, sections
-opened or closed against their default, and open member execution are kept in
+`reveal.memberAppId` opens that member's execution; `reveal.profileAppId` opens that
+member's profile (the member rail's hover card asks for it). The page, sections
+opened or closed against their default, open profile and open member execution are kept in
 `tab.view.teamTask`, so returning to the tab lands there again. Its outputs open as canvas
 tabs (`openFile` on the resolved local copy, so binaries still go to the system
 application); the team workbench drawer keeps opening them in the system

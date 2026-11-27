@@ -114,7 +114,8 @@ export function startOfMonth(): number {
 /** Team work finished since the month began; work a person ended unfinished is not counted. */
 export function doneThisMonth(detail: TeamDetail, tasks: readonly TeamConversation[]): TeamConversation[] {
   const monthStart = startOfMonth()
-  return tasks.filter(task => isTeamWork(task) && !task.endedManually && taskState(detail, task).key === 'done' && (task.finishedAt ?? task.lastActivityAt) >= monthStart)
+  // A task a periodic check keeps going is not finished, whatever its last round left done.
+  return tasks.filter(task => isTeamWork(task) && !task.endedManually && !task.checkCount && taskState(detail, task).key === 'done' && (task.finishedAt ?? task.lastActivityAt) >= monthStart)
 }
 
 /** The state of every task at once, for a list that reads each one several times. */

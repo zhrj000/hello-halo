@@ -100,7 +100,7 @@ function CollabMembers({ spaceId, collab, teamDetail, task, onOpenMember }: Coll
       waitingAppIds={new Set(pending.map(item => item.appId))} workingAppIds={working}
       progress={progress && { progress, leadAppId: detail.team.leadAppId ?? null, outputCount: task.artifactCount ?? 0, onAnswer: openRoom }}
       onActivity={activityId => openProgress(activityId ? { activityId } : undefined)}
-      onSelect={member => onOpenMember(member.appId)} />
+      onSelect={member => onOpenMember(member.appId)} onProfile={appId => openProgress({ profileAppId: appId })} />
   </div>
 }
 
@@ -113,5 +113,6 @@ function CollabMemberRoom({ spaceId, collab, teamDetail, task, appId, focus, onS
   return <TaskRoom homepageConversation returnToMain={onReturn} detail={detail} task={task} selectedAppId={appId} boardState={boardState} tasks={[]}
     decisionTarget={focus?.entryId} decisionSeq={focus?.seq}
     onSelectMember={member => onSelect(member.appId)} onCreated={() => {}} onTask={() => {}}
-    onActivity={activityId => openProgress(activityId ? { activityId } : undefined)} onExecution={memberAppId => openProgress({ memberAppId })} />
+    onActivity={activityId => openProgress(activityId ? { activityId } : undefined)} onExecution={memberAppId => openProgress({ memberAppId })}
+    onProfile={profileAppId => openProgress({ profileAppId })} />
 }

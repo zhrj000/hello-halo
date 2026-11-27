@@ -9,7 +9,7 @@ vi.mock('../../../src/renderer/components/apps/AutomationAvatar', () => ({
   AutomationAvatar: ({ name }: { name: string }) => createElement('span', { 'data-avatar': name }),
 }))
 import { LockedComposer } from '../../../src/renderer/components/team/LockedComposer'
-import { TaskMemberSelector } from '../../../src/renderer/components/team/workbench/TaskMemberSelector'
+import { MemberRailCard, memberCardFacts, TaskMemberSelector } from '../../../src/renderer/components/team/workbench/TaskMemberSelector'
 import { orderTaskMembers, railCapacity, railFit, railMembers, rememberRecent } from '../../../src/renderer/components/team/workbench/member-rail'
 import type { TaskProgress } from '../../../src/renderer/components/team/workbench/progress'
 
@@ -110,17 +110,44 @@ describe('task member navigation', () => {
     const html = render([lead, ...roster], 'own-b', { ownedAppIds: ['boss', 'own-b'] })
     expect(html).toContain('aria-label="boss · Team lead · You can message it"')
   })
-  it('cards a member with its role, duty, state here and who may message it, read-only members included', () => {
-    const writer = { ...member('writer'), role: 'Copywriter', duty: 'Drafts the launch copy', owner: 'Alice', presence: 'offline' } as RosterMember
-    const html = render([...roster, writer], 'own-b', { workingAppIds: new Set(['writer']) })
-    const card = html.split('data-card=""').map(part => part.split('</button>')[0]).find(part => part.includes('data-avatar="writer"'))!
+  it('cards a member with its role, duty, description, state here and who may message it, read-only members included', () => {
+    const writer = { ...member('writer'), role: 'Copywriter', duty: 'Drafts the launch copy', owner: 'Alice', presence: 'online' } as RosterMember
+    const facts = (target: RosterMember, extra: Partial<Parameters<typeof memberCardFacts>[1]> = {}) => memberCardFacts(target, {
+      roster: [...roster, writer], progressOf: new Map(), owned: new Set(['own-b']), waiting: new Set(), working: new Set(['writer']), temporary: false, ...extra,
+    }, ((text: string) => text) as never)
+    const card = renderToStaticMarkup(createElement(MemberRailCard, { member: writer, card: facts(writer) }))
     expect(card).toContain('Copywriter')
     expect(card).toContain('Drafts the launch copy')
     expect(card).toContain('Working…')
     expect(card).toContain('{{owner}}’s digital human · Read-only')
-    expect(card).toContain('{{owner}} is offline')
+    expect(card).not.toContain('{{owner}} is offline')
     expect(card).toContain('data-avatar="writer"')
-    expect(html).not.toMatch(/aria-pressed="true"[^>]*>(?:(?!<\/button>).)*data-card/)
+    // Duty and description shown in full, with the digital human's own description when there is one;
+    // only the state line (which can hold a whole waiting question) is held to two lines, its full text in a tooltip.
+    expect(card).not.toMatch(/line-clamp[^"]*"[^>]*>Drafts the launch copy/)
+    expect(card).toMatch(/title="Working…"[^>]*line-clamp-2|line-clamp-2[^>]*title="Working…"/)
+    const mine = { ...member('own-b'), duty: 'Owns the plan' } as RosterMember
+    const own = renderToStaticMarkup(createElement(MemberRailCard, { member: mine, card: facts(mine, { description: '  Writes weekly reports  ' }), onProfile: vi.fn() }))
+    expect(own).toContain('The digital human itself')
+    expect(own).toContain('Writes weekly reports')
+    expect(own).toContain('You can message it')
+    expect(own).toContain('View details')
+    expect(card).not.toContain('View details')
+  })
+  it('opens a card only on hover or focus, the selected member included, so the static rail carries none', () => {
+    const html = render(roster, 'own-b', { onProfile: vi.fn() })
+    expect(html).not.toContain('data-member-card')
+    expect(html).not.toContain('data-card=""')
+  })
+  it('fades an offline member and drops its stale work for the offline line', () => {
+    const writer = { ...member('writer'), owner: 'Alice', presence: 'offline' } as RosterMember
+    const html = render([...roster, writer], 'own-b', { workingAppIds: new Set(['writer']) })
+    const item = html.split('data-rail-item=""').find(part => part.includes('data-avatar="writer"'))!.split('</button>')[0]
+    expect(item).toMatch(/member-rail-avatar[^"]*opacity-50/)
+    expect(item).not.toContain('data-tone="working"')
+    expect(item).not.toContain('Working…')
+    expect(item).toContain('{{owner}} is offline')
+    expect(html).not.toMatch(/data-avatar="own-a"(?:(?!<\/button>).)*opacity-50/)
   })
   it('collapses large teams behind an overflow chip that flags hidden members waiting for the user', () => {
     const html = renderToStaticMarkup(createElement(TaskMemberSelector, {

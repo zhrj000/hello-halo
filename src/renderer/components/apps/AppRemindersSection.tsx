@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { X } from 'lucide-react'
 import { api } from '../../api'
+import { useAppRemindersStore } from '../../stores/app-reminders.store'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import type { ConversationReminderView } from '../../../shared/apps/conversation-reminders'
 import { formatCronHumanReadable, formatFrequency } from './schedule-utils'
@@ -45,6 +46,8 @@ export function AppRemindersSection({ appId }: { appId: string }) {
     const res = await api.appListReminders(appId)
     setLoadFailed(!res.success)
     setReminders(res.success && res.data ? res.data : [])
+    // The chat's mark and the list rows read the same reminders; hand them what this read.
+    if (res.success) useAppRemindersStore.setState(state => ({ byApp: { ...state.byApp, [appId]: res.data ?? [] } }))
   }, [appId])
 
   useEffect(() => {

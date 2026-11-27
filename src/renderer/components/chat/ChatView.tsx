@@ -15,6 +15,7 @@
  */
 
 import { forwardRef, useState, useCallback, useEffect, useRef, useMemo } from 'react'
+import { ConversationRemindersMark } from '../apps/ConversationReminders'
 import { useShallow } from 'zustand/react/shallow'
 import type { ReactNode } from 'react'
 import { SquareCheckBig, Code, Bot, FileText, BookOpen, AlertCircle } from 'lucide-react'
@@ -577,6 +578,7 @@ export function ChatView({ isCompact = false, isVisible = true }: ChatViewProps)
       draftKey={activeConversationId ?? undefined}
       goal={goalComposer}
       sendSlot={sendControls}
+      leadingSlot={isDigitalHuman && activeAppId && activeConversationId ? <ConversationRemindersMark appId={activeAppId} conversationId={activeConversationId} /> : undefined}
     />
     </>
   )

@@ -24,6 +24,7 @@ import { PushedMessageLabel, isPushedMessage } from './PushedMessageLabel'
 import { ContinuityNotice, isContinuityNotice } from './ContinuityNotice'
 import { ReplyEndingNote } from './ReplyEndingNote'
 import type { Message, Thought } from '../../types'
+import { ReminderRunLine } from '../apps/ConversationReminders'
 
 export interface MessageRowProps {
   afterThoughts?: ReactNode
@@ -101,6 +102,9 @@ export interface MessageRowProps {
 
   /** The chat shows how this reply ended right below it (the notice after a stop), so the reply's own note steps aside. */
   endingShownBelow?: boolean
+
+  /** This reply answered a reminder coming due, not something the person said. */
+  reminderRun?: boolean
 }
 
 export const MessageRow = memo(function MessageRow({
@@ -125,6 +129,7 @@ export const MessageRow = memo(function MessageRow({
   senderName,
   authorName,
   endingShownBelow = false,
+  reminderRun = false,
 }: MessageRowProps) {
   const hasInlineThoughts = Array.isArray(message.thoughts) && message.thoughts.length > 0
   const processThoughts = useMemo(() => hasInlineThoughts && arrivals?.length
@@ -165,6 +170,15 @@ export const MessageRow = memo(function MessageRow({
         <div className="w-[85%]">
           <ReplyOpeners senderName={senderName} openers={openers?.length ? openers : [message]} reveal={openerReveal} />
         </div>
+      </div>
+    )
+  }
+
+  // A reply a reminder's coming-due drew: one quiet line, as a team check's reply is.
+  if (reminderRun && message.role === 'assistant' && !message.error) {
+    return (
+      <div className={`pb-3 ${className}`}>
+        <ReminderRunLine message={message} />
       </div>
     )
   }

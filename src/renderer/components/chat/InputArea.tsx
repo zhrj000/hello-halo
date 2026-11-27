@@ -179,6 +179,8 @@ interface InputAreaProps {
   placeholder?: string
   isCompact?: boolean
   toolbarSlot?: React.ReactNode
+  /** Right after the recipient: what stands in this conversation with it (its reminders), so the recipient never moves. */
+  leadingSlot?: React.ReactNode
   /** Controls placed just left of the send button (e.g. model and quota). */
   sendSlot?: React.ReactNode
   /** Available slash commands for the "/" quick-input autocomplete */
@@ -272,7 +274,7 @@ interface ImageError {
 }
 
 // Memoized: the composer is large and its parent re-renders on every turn-state change.
-export const InputArea = memo(function InputArea({ onSend, onInject, supportsImageInjection = true, onStop, isGenerating, placeholder, isCompact = false, toolbarSlot, sendSlot, draftKey, referenceKey: referenceKeyProp, slashCommands = [], mentionSpaceId, mentionConversations = [], hideToolsetControls = false, hideKnowledgeControls = false, standalone = false, digitalHumanSelector, goal }: InputAreaProps) {
+export const InputArea = memo(function InputArea({ onSend, onInject, supportsImageInjection = true, onStop, isGenerating, placeholder, isCompact = false, toolbarSlot, leadingSlot, sendSlot, draftKey, referenceKey: referenceKeyProp, slashCommands = [], mentionSpaceId, mentionConversations = [], hideToolsetControls = false, hideKnowledgeControls = false, standalone = false, digitalHumanSelector, goal }: InputAreaProps) {
   const { t } = useTranslation()
   const sendKeyMode = useAppStore(state => state.config?.chat?.sendKeyMode ?? 'enter')
 
@@ -1610,6 +1612,7 @@ export const InputArea = memo(function InputArea({ onSend, onInject, supportsIma
             onStop={onStop}
             sendKeyMode={sendKeyMode}
             toolbarSlot={toolbarSlot}
+            leadingSlot={leadingSlot}
             sendSlot={sendSlot}
             hideKnowledgeControls={hideKnowledgeControls}
             digitalHumanSelector={digitalHumanSelector}
@@ -1628,6 +1631,7 @@ export const InputArea = memo(function InputArea({ onSend, onInject, supportsIma
  */
 interface InputToolbarProps {
   toolbarSlot?: React.ReactNode
+  leadingSlot?: React.ReactNode
   sendSlot?: React.ReactNode
   isGenerating: boolean
   isOnboarding: boolean
@@ -1648,6 +1652,7 @@ interface InputToolbarProps {
 
 function InputToolbar({
   toolbarSlot,
+  leadingSlot,
   sendSlot,
   isGenerating,
   isOnboarding,
@@ -1676,6 +1681,7 @@ function InputToolbar({
         {digitalHumanSelector && !isOnboarding && (
           <DigitalHumanSelector {...digitalHumanSelector} />
         )}
+        {leadingSlot && !isOnboarding && <div className="shrink-0">{leadingSlot}</div>}
 
         {canOpenMenu && !isOnboarding && (
           <button

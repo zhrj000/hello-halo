@@ -76,7 +76,7 @@ export function teamTaskToTaskItem({ task, status }: TeamTaskNeed): TaskItem {
     key: teamTaskKey(task.teamId, task.epochId),
     source: 'team',
     status,
-    title: task.label || i18n.t('New team conversation'),
+    title: task.label || i18n.t('New task'),
     detail: `${task.teamName} · ${why}`,
     spaceId: task.spaceId,
     spaceName: '',

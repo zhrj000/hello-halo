@@ -16,13 +16,14 @@ import { TaskConversation } from './TaskConversation'
 import { ExecutionStatus } from './ExecutionStatus'
 import { TaskStartGuide } from './TaskStartGuide'
 import { TaskMemberSelector } from './TaskMemberSelector'
+import { EpochChecksChip } from '../EpochChecksChip'
 import { useTaskProgress } from './useTaskProgress'
 import { AutomationAvatar } from '../../apps/AutomationAvatar'
 import { ownedTaskMembers } from './members'
 import { navigateToConversation } from '../../../utils/conversation-navigation'
 import { ConversationReferenceScope } from '../../references'
 
-export function TaskRoom({ detail, task, selectedAppId, onSelectMember, onCreated, onActivity, boardState, decisionTarget, decisionSeq, tasks, onTask, onExecution, blocked = false, homepageConversation = false, returnToMain, viewOnly }: {
+export function TaskRoom({ detail, task, selectedAppId, onSelectMember, onCreated, onActivity, onProfile, boardState, decisionTarget, decisionSeq, tasks, onTask, onExecution, blocked = false, homepageConversation = false, returnToMain, viewOnly }: {
   blocked?: boolean; homepageConversation?: boolean
   /** A temporary team's member, watched from inside the conversation that leads the team: nobody else may message it. */
   returnToMain?: () => void
@@ -35,6 +36,8 @@ export function TaskRoom({ detail, task, selectedAppId, onSelectMember, onCreate
   onCreated: (id: string) => void; onActivity: (activityId?: string) => void; boardState: TaskBoardState; decisionTarget?: string
   /** A new value asks for `decisionTarget` again, even when it did not change. */
   decisionSeq?: number; tasks: TeamConversation[]; onTask: (id: string, decisionEntry?: boolean) => void; onExecution: (appId: string) => void
+  /** Opens a member's profile in the task's progress, from its card on the member rail. */
+  onProfile?: (appId: string) => void
 }) {
   const { t } = useTranslation()
   const apps = useAppsStore(s => s.apps)
@@ -146,8 +149,10 @@ export function TaskRoom({ detail, task, selectedAppId, onSelectMember, onCreate
     : undefined
   const tookPart = viewOnly?.members
   const railRoster = tookPart ? detail.roster.filter(item => item.appId === appId || tookPart.includes(item.appId)) : detail.roster
+  // The periodic checks standing in this conversation, as a mark inside the member rail.
+  const checksChip = homepageConversation && epochId && !returnToMain && !viewOnly ? <EpochChecksChip detail={detail} epochId={epochId} /> : undefined
   const picker = homepageConversation ? <div className="min-w-0 pt-1">
-    <TaskMemberSelector roster={railRoster} selectedAppId={appId} ownedAppIds={ids} waitingAppIds={waitingAppIds} workingAppIds={workingAppIds} progress={conversationProgress} onActivity={task ? onActivity : undefined} onSelect={onSelectMember}
+    <TaskMemberSelector roster={railRoster} selectedAppId={appId} ownedAppIds={ids} waitingAppIds={waitingAppIds} workingAppIds={workingAppIds} progress={conversationProgress} onActivity={task ? onActivity : undefined} onSelect={onSelectMember} onProfile={task ? onProfile : undefined} checksSlot={checksChip}
       onAnswer={id => { const entry = pending.find(item => item.appId === id); if (entry) focusDecision(entry) }}
       temporary={!!returnToMain} insideProgress={!!viewOnly} />
   </div> : workbenchPicker
@@ -192,7 +197,7 @@ export function TaskRoom({ detail, task, selectedAppId, onSelectMember, onCreate
       }} isBackgroundTurn={isTeamBackgroundTurn}
       emptyContent={homepageConversation ? undefined : <TaskStartGuide tasks={tasks} onTask={onTask} />}
       emptyTitle={homepageConversation || task ? t('No messages yet') : t('What would you like the team to do?')}
-      emptyHint={homepageConversation || task ? undefined : t('Send your first message to create a task. Your digital human will coordinate with the team.')}
+      emptyHint={task ? undefined : homepageConversation ? t('Tell the team what you need. Send it and the task begins.') : t('Send your first message to create a task. Your digital human will coordinate with the team.')}
     /></ConversationReferenceScope> : <><div className="min-h-0 flex-1 overflow-y-auto p-4">{viewOnly?.header}{timeline([])}<p className="mt-6 text-center text-sm text-muted-foreground">{task && !boardState.board && !boardState.failed ? t('Loading task…') : t('Bring one of your digital humans into this team to start talking.')}</p></div>{homepageConversation && !viewOnly && <div className="shrink-0 px-6 pb-[18px]"><div className="mx-auto max-w-chat">{picker}</div></div>}</>}
   </section>
 }

@@ -745,7 +745,7 @@ async function runAppChatTurn(
       caller.requestId = adopted
     }
     const fromHuman = !!request.collaborationRequestId || teamContext.personalChat || (teamContext.kind ?? 'human_message') === 'human_message'
-    if (getActiveTeamRuntime()?.noteEpochTurn(teamContext.teamId, teamContext.epochId, fromHuman) === false) throw new Error('This task is closed; a human must resume it.')
+    if (getActiveTeamRuntime()?.noteEpochTurn(teamContext.teamId, teamContext.epochId, fromHuman, { ambient: teamContext.kind === 'periodic_check' }) === false) throw new Error('This task is closed; a human must resume it.')
     teamRequestId = participants.requestId(caller)
     participants.capture({ ...caller, requestId: teamRequestId })()
     reportAllowed = participants.reportGuard(teamContext.teamId, teamContext.epochId, teamRequestId)
@@ -918,7 +918,7 @@ async function runAppChatTurn(
     // Every team turn (user/IM/teammate) stamps the epoch's activity, and wakes
     // it when hibernated so coordination resumes and member replies route back.
     const fromHuman = !teamContext.kind || teamContext.kind === 'human_message'
-    if (!participants && getActiveTeamRuntime()?.noteEpochTurn(teamContext.teamId, teamContext.epochId, fromHuman) === false) throw new Error('This task is closed; a human must resume it.')
+    if (!participants && getActiveTeamRuntime()?.noteEpochTurn(teamContext.teamId, teamContext.epochId, fromHuman, { ambient: teamContext.kind === 'periodic_check' }) === false) throw new Error('This task is closed; a human must resume it.')
     // Auto-name a native "New session" from the person's first message (parity
     // with the space chat). A teammate-driven turn's input is a relayed
     // envelope, never the user's words.

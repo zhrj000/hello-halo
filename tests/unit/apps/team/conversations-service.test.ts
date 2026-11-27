@@ -228,6 +228,19 @@ describe('TeamService — conversations + pending escalations', () => {
     expect(im).toMatchObject({ kind: 'im', readonly: true, label: 'WeCom Group', channel: 'im' })
   })
 
+  it('tells how many periodic checks stand in each conversation, and says nothing when there are none', async () => {
+    const svc = build()
+    const { epochId } = await svc.openConversation(TEAM_ID, 'With checks')
+    const other = await svc.openConversation(TEAM_ID, 'Without')
+    const check = { teamId: TEAM_ID, epochId, targetAppId: MEMBER_APP, createdByAppId: MEMBER_APP, instruction: 'look', schedule: { kind: 'every' as const, every: '1h' }, runCount: 0, createdAt: 1, updatedAt: 1, lastRunAt: null }
+    store.upsertCheck({ ...check, id: 'check-1' })
+    store.upsertCheck({ ...check, id: 'check-2' })
+
+    const list = svc.listConversations(TEAM_ID)
+    expect(list.find(c => c.epochId === epochId)?.checkCount).toBe(2)
+    expect(list.find(c => c.epochId === other.epochId)).not.toHaveProperty('checkCount')
+  })
+
   it('flags a conversation active when a member is busy on it', async () => {
     const svc = build()
     const { epochId } = await svc.openConversation(TEAM_ID)

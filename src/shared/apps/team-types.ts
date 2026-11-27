@@ -419,6 +419,8 @@ export interface TeamConversation {
   subtasks?: { done: number; open: number }
   /** True once the lead brought another member into the work. */
   teamwork?: boolean
+  /** Periodic checks standing in this work: a member's recurring instruction to a teammate. Absent when none. */
+  checkCount?: number
 
   epochId: string
   teamId: string

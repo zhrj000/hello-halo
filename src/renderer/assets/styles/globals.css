@@ -848,12 +848,15 @@ html.platform-desktop body::after {
 }
 
 /* A member's card opens from the bar's left edge, like the members panel, so it
-   never runs off the composer whichever avatar is hovered. */
-.member-rail-tip[data-card] {
-  --tip-x: 0px;
+   never runs off the composer whichever avatar is hovered. It is a surface of its
+   own: the pointer can move onto it, and it opens the member's profile. */
+.member-rail-card {
   --avatar-dot-ring: hsl(var(--popover));
+  position: absolute;
+  bottom: calc(100% + 10px);
   left: 0;
-  width: 280px;
+  z-index: 30;
+  width: 300px;
   max-width: calc(100vw - 32px);
   padding: 14px;
   border: 1px solid var(--border-soft);
@@ -864,6 +867,38 @@ html.platform-desktop body::after {
   line-height: 1.45;
   text-align: left;
   white-space: normal;
+  animation: member-card-in 160ms var(--ease);
+}
+
+/* Covers the gap down to the bar, so crossing it does not count as leaving. */
+.member-rail-card::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: -1px;
+  right: -1px;
+  height: 12px;
+}
+
+/* Long duties and descriptions scroll inside the card instead of pushing it off screen. */
+.member-rail-card-body {
+  max-height: min(40vh, 280px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.member-rail-card-action {
+  transition: background-color 100ms;
+}
+
+.member-rail-card:hover .member-rail-card-action {
+  background: hsl(var(--foreground) / .06);
+  color: hsl(var(--foreground));
+}
+
+@keyframes member-card-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
 }
 
 .member-rail-item[aria-pressed="true"][data-state="waiting"] {
@@ -905,19 +940,13 @@ html.platform-desktop body::after {
   transform: rotate(45deg);
 }
 
-:is(.member-rail-item:hover, .member-rail-item:focus-visible) .member-rail-ask {
+:is(.member-rail-item:hover, .member-rail-item:focus-visible, .member-rail-item[data-card-open]) .member-rail-ask {
   opacity: 0;
 }
 
 @keyframes member-rail-ask-in {
   from { opacity: 0; transform: translateY(4px) scale(.9); }
   to { opacity: 1; transform: none; }
-}
-
-/* The rail starts at the column edge, so its first tip opens rightward. */
-.member-rail-item:first-of-type .member-rail-tip {
-  left: 0;
-  --tip-x: 0px;
 }
 
 :is(.member-rail-item, .member-rail-more, .member-rail-status):focus-visible .member-rail-tip {
@@ -931,12 +960,14 @@ html.platform-desktop body::after {
     transform: translate(var(--tip-x, -50%), 0);
   }
 
-  .member-rail-item:not([aria-pressed="true"]):hover .member-rail-avatar {
+  /* The avatar stays raised while its card is open, the pointer on the card. */
+  .member-rail-item:not([aria-pressed="true"]):is(:hover, [data-card-open]) .member-rail-avatar {
     transform: scale(1.22) translateY(-2px);
   }
 
-  .member-rail-item:not([aria-pressed="true"]):has(+ .member-rail-item:not([aria-pressed="true"]):hover) .member-rail-avatar,
-  .member-rail-item:not([aria-pressed="true"]):hover + .member-rail-item:not([aria-pressed="true"]) .member-rail-avatar {
+  /* The open card sits in the DOM right after its avatar, so the next neighbour is one step further. */
+  .member-rail-item:not([aria-pressed="true"]):has(+ .member-rail-item:not([aria-pressed="true"]):is(:hover, [data-card-open])) .member-rail-avatar,
+  .member-rail-item:not([aria-pressed="true"]):is(:hover, [data-card-open]) + .member-rail-card + .member-rail-item:not([aria-pressed="true"]) .member-rail-avatar {
     transform: scale(1.08);
   }
 }
@@ -979,6 +1010,7 @@ html.platform-desktop body::after {
 
   .animate-member-rail-enter,
   .animate-member-panel-in,
+  .member-rail-card,
   .member-rail-ask,
   .animate-member-swap {
     animation: none;

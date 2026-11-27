@@ -2083,6 +2083,10 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     const stats = store.getConversationStats(teamId, [...ownIds], openEpochs.map(epoch => epoch.id), detailed)
     const { involved, outputCounts, unansweredDecisionMembers, teamwork, participants } = stats
     const subtasks = settleSubtasks(team, stats, busyByEpoch)
+    const checkCounts = new Map<string, number>()
+    for (const check of store.listChecksByTeam(teamId)) {
+      if (selectedIds.has(check.epochId)) checkCounts.set(check.epochId, (checkCounts.get(check.epochId) ?? 0) + 1)
+    }
     const answered = detailed ? deps.listAnsweredMembers?.(teamId, [...ownIds], openEpochs.map(epoch => epoch.id)) : undefined
     // A cleared IM chat takes no further turns, so a failure left in it is history, not a stop to act on.
     const unfinished = openEpochs.filter(epoch => epoch.workItem?.status !== 'completed' && !(epoch.endedAt !== null && (epoch.endReason === 'completed' || epoch.endReason === 'cleared'))).map(epoch => epoch.id)
@@ -2159,6 +2163,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
         artifactCount: outputCounts.get(epoch.id) ?? 0,
         ...(subtasks.has(epoch.id) ? { subtasks: subtasks.get(epoch.id) } : {}),
         ...(teamwork.has(epoch.id) ? { teamwork: true } : {}),
+        ...(checkCounts.has(epoch.id) ? { checkCount: checkCounts.get(epoch.id) } : {}),
         label: (kind !== 'collab' && epoch.workItem?.title) || (kind === 'run' ? team.name : deriveConversationLabel(store, epoch, deps.describeChatKey, members)),
         // IM chats are answered in the IM app; a run is continued in place like a native chat.
         readonly: kind === 'im' || isReadonlyCollaboration(team, epoch),

@@ -10,12 +10,14 @@ import { AutomationAvatar } from '../../apps/AutomationAvatar'
 import { MessageRow } from '../../chat/MessageRow'
 import { InjectionAnnotation } from '../../chat/InjectionAnnotation'
 import { DispatchLine, OpenersLine } from '../../chat/team-collab'
-import { inputsByReply } from '../../chat/transcript'
+import { inputsByReply, SegmentTime } from '../../chat/transcript'
 import { TaskTimestamp } from './TaskTimestamp'
 import { taskTime } from './time'
 import { undeliveredParties } from '../../../../shared/apps/team-failures'
-import { activityLevel, conversationMessages, decisionMessageId, COLLABORATION_PREVIEW_LIMIT, taskConversationRows, type SharedTaskDecision } from './model'
+import { activityLevel, conversationMessages, decisionMessageId, isCheckRunRow, isFoldableCheckRun, isReportActivity, COLLABORATION_PREVIEW_LIMIT, taskConversationRows, type SharedTaskDecision } from './model'
 import { UndeliveredNote } from './UndeliveredNote'
+import { CheckRunLine } from './CheckRunLine'
+import { ReportCard } from './ReportCard'
 
 /**
  * Marks the question a person was just brought to, so the jump is seen even
@@ -74,8 +76,8 @@ export function TaskConversation({ messages, activities, epochId, appId, detail,
     return openable(id) ? () => onOpenMember?.(id, activity.id) : undefined
   }
   // Each message's name opens its party; the footer names the one party only when there is one.
-  const partyLinks = (updates: TeamActivity[], party: 'actorAppId' | 'targetAppId') => {
-    const parties = [...new Set(updates.map(activity => activity[party]))]
+  const partyLinks = (updates: TeamActivity[], party: 'actorAppId' | 'targetAppId' | ((activity: TeamActivity) => string | null)) => {
+    const parties = [...new Set(updates.map(activity => typeof party === 'function' ? party(activity) : activity[party]))]
     const only = parties.length === 1 ? parties[0] : null
     const latest = updates[updates.length - 1]
     return openable(only)
@@ -89,7 +91,24 @@ export function TaskConversation({ messages, activities, epochId, appId, detail,
   const [olderPage, setOlderPage] = useState(0)
   const end = Math.max(0, rows.length - olderPage * 50)
   const visibleRows = rows.slice(Math.max(0, end - 50), end)
-  const latestReplyId = rows.findLast(row => row.message?.role === 'assistant')?.message?.id
+  // Time lines are decided over every loaded row on the timeline (messages, and on the
+  // homepage the member's own lines and reports), so paging never moves one.
+  const timed = useMemo(() => {
+    const list: Array<{ rowId: string; timestamp: string }> = []
+    for (const row of rows) {
+      if (row.message) list.push({ rowId: row.id, timestamp: row.message.timestamp })
+      else if (homepageConversation && appId && row.activities?.length) {
+        const at = taskTime(row.activities[0].createdAt)
+        if (at) list.push({ rowId: row.id, timestamp: new Date(at).toISOString() })
+      }
+    }
+    return { list, index: new Map(list.map((entry, index) => [entry.rowId, index])) }
+  }, [rows, homepageConversation, appId])
+  const segmentTime = (rowId: string) => {
+    const index = timed.index.get(rowId)
+    return index === undefined ? null : <SegmentTime messages={timed.list} index={index} />
+  }
+  const latestReplyId = rows.findLast(row => row.message?.role === 'assistant' && !(homepageConversation && isFoldableCheckRun(row.message)))?.message?.id
   const lastUpdates = rows[rows.length - 1]?.activities
   const endsWithReceived = homepageConversation && olderPage === 0 && !!appId && !!lastUpdates
     && activityLevel(lastUpdates[lastUpdates.length - 1]) !== 'attention' && lastUpdates.every(activity => activity.targetAppId === appId)
@@ -227,6 +246,7 @@ export function TaskConversation({ messages, activities, epochId, appId, detail,
     {showEmpty && !homepageConversation && !hasHumanConversation && <div className="rounded-xl border border-dashed border-border p-4"><p className="text-sm leading-6 text-muted-foreground">{t('You have not talked to this digital human in this task yet.')}</p>{emptyActions}</div>}
     {rows.length > 50 && <nav className="flex items-center justify-between text-xs text-primary"><button disabled={end <= 50} onClick={() => setOlderPage(value => value + 1)} className="min-h-9 disabled:opacity-40">{t('Older messages')}</button><button disabled={olderPage === 0} onClick={() => setOlderPage(value => Math.max(0, value - 1))} className="min-h-9 disabled:opacity-40">{t('Newer messages')}</button></nav>}
     {visibleRows.map(row => {
+      if (homepageConversation && !!appId && isCheckRunRow(row)) return <Fragment key={row.id}>{segmentTime(row.id)}<CheckRunLine message={row.message!} reports={(row as { reports?: TeamActivity[] }).reports} /></Fragment>
       if (row.decision) return decisionCard(row.decision)
       if (row.sharedDecision) return sharedDecisionCard(row.sharedDecision)
       if (row.additions) return <div key={row.id} className="w-[85%]"><InjectionAnnotation messages={row.additions} /></div>
@@ -239,12 +259,20 @@ export function TaskConversation({ messages, activities, epochId, appId, detail,
           items={row.openers.map(activity => ({ id: activity.id, from: name(activity.actorAppId), onOpen: openParty(activity, 'actorAppId'), at: taskTime(activity.createdAt) ?? 0, content: (activity.body || activity.subject).trim() }))}
           footer={partyLinks(row.openers, 'actorAppId')} reveal={revealFor(row.openers)}
         /> : undefined
-        const dispatchLine = row.dispatches?.length ? <DispatchLine
+        // What this reply sent, and what reached it while it ran, as one exchange.
+        const exchanged = [...row.dispatches ?? [], ...row.received ?? []]
+        const otherParty = (activity: TeamActivity) => activity.targetAppId === appId ? activity.actorAppId : activity.targetAppId
+        const dispatchLine = exchanged.length ? <DispatchLine
           senderName={homepageConversation && appId ? name(appId) : undefined}
-          items={row.dispatches.map(activity => ({ id: activity.id, to: name(activity.targetAppId), onOpen: openParty(activity, 'targetAppId'), at: taskTime(activity.createdAt) ?? 0, content: (activity.body || activity.subject).trim() }))}
-          footer={partyLinks(row.dispatches, 'targetAppId')} reveal={revealFor(row.dispatches)}
+          items={exchanged.map(activity => activity.targetAppId === appId
+            ? { id: activity.id, from: name(activity.actorAppId), onOpen: openParty(activity, 'actorAppId'), at: taskTime(activity.createdAt) ?? 0, content: (activity.body || activity.subject).trim() }
+            : { id: activity.id, to: name(activity.targetAppId), onOpen: openParty(activity, 'targetAppId'), at: taskTime(activity.createdAt) ?? 0, content: (activity.body || activity.subject).trim() })}
+          footer={partyLinks(exchanged, otherParty)} reveal={revealFor(exchanged)}
         /> : undefined
-        return <MessageRow key={row.id} message={row.message} openersLine={openersLine} afterReply={dispatchLine} hideBrowserLiveView hideTerminalOpen senderName={homepageConversation && appId ? name(appId) : undefined} authorName={authorName} injectionMessages={carried?.injections} arrivals={carried?.arrivals} afterThoughts={requests.length ? requests.map(decisionCard) : undefined} actionsOnHover={messageId !== latestReplyId} endingShownBelow={messageId === endingShownBelow} />
+        // A round reads in the order it happened: the reply, who it talked to on the way, then what it reported at the end.
+        const reportCards = row.reports?.length ? <div className={dispatchLine ? '-mt-4 mb-7' : ''}>{row.reports.map(report => <ReportCard key={report.id} activity={report} />)}</div> : null
+        const afterReply = reportCards ? <>{dispatchLine}{reportCards}</> : dispatchLine
+        return <Fragment key={row.id}>{segmentTime(row.id)}<MessageRow message={row.message} openersLine={openersLine} afterReply={afterReply} hideBrowserLiveView hideTerminalOpen senderName={homepageConversation && appId ? name(appId) : undefined} authorName={authorName} injectionMessages={carried?.injections} arrivals={carried?.arrivals} afterThoughts={requests.length ? requests.map(decisionCard) : undefined} actionsOnHover={messageId !== latestReplyId} endingShownBelow={messageId === endingShownBelow} /></Fragment>
       }
       const updates = row.activities
       const latest = updates[updates.length - 1]
@@ -258,14 +286,15 @@ export function TaskConversation({ messages, activities, epochId, appId, detail,
         </article>
       }
       if (!homepageConversation || !appId) return collaborationCard(row.id, updates)
-      // No shown reply carries these: each run reads as the member's own line, in order.
+      // No shown reply carries these: a report is drawn as itself, and each run of messages reads as the member's own line, in order.
+      const reports = updates.filter(isReportActivity)
       const runs: TeamActivity[][] = []
-      for (const activity of updates) {
+      for (const activity of updates.filter(activity => !isReportActivity(activity))) {
         const run = runs[runs.length - 1]
         if (run && (run[0].targetAppId === appId) === (activity.targetAppId === appId)) run.push(activity)
         else runs.push([activity])
       }
-      return <Fragment key={row.id}>{runs.map(run => <div key={run[0].id} className="w-[85%]">{run[0].targetAppId === appId
+      return <Fragment key={row.id}>{segmentTime(row.id)}{reports.map(report => <div key={report.id} className="mb-5 w-[85%]"><ReportCard activity={report} /></div>)}{runs.map(run => <div key={run[0].id} className="w-[85%]">{run[0].targetAppId === appId
         ? <OpenersLine
           senderName={name(appId)}
           items={run.map(activity => ({ id: activity.id, from: name(activity.actorAppId), onOpen: openParty(activity, 'actorAppId'), at: taskTime(activity.createdAt) ?? 0, content: (activity.body || activity.subject).trim() }))}

@@ -19,6 +19,7 @@ import {
   setConversationReminders,
   type ConversationReminders,
 } from '../../../../src/main/apps/runtime/reminders'
+import { readReminderTurn } from '../../../../src/shared/apps/conversation-reminders'
 import { ImSessionRegistry } from '../../../../src/main/apps/runtime/im-session-registry'
 
 const APP = 'app-1'
@@ -151,6 +152,14 @@ describe('a reminder coming due', () => {
     expect(onTime).toBe('[Reminder you set in this conversation at the request of Li on 2026-10-06 10:30 · due 2026-10-06 11:30]\n\nTell the group the hour is up.')
     expect(renderReminderTurn(reminder, NOW + 60 * MIN, NOW + 200 * MIN)).toContain('due 2026-10-06 11:30, delivered late at 2026-10-06 13:50]')
     expect(renderReminderTurn(reminder, NOW + 60 * MIN, NOW + 60 * MIN, 3)).toContain('; it came due 3 more times while this conversation was busy]')
+  })
+
+  it('is read back by the chat as the reminder it is, with or without an IM sender tag, and nothing else is', () => {
+    const reminder = reminders.set({ appId: APP, conversationId: GROUP, message: 'Stand up and stretch.', when: { every: '10m' } })
+    const turn = renderReminderTurn(reminder, NOW + 10 * MIN, NOW + 10 * MIN)
+    expect(readReminderTurn(turn)).toEqual({ message: 'Stand up and stretch.' })
+    expect(readReminderTurn(`<msg-sender id="u-1" name="Li" />\n${turn}`)).toEqual({ message: 'Stand up and stretch.' })
+    expect(readReminderTurn('Remind me every 10 minutes to stand up')).toBeNull()
   })
 })
 

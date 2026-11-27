@@ -17,6 +17,9 @@ import { CollaborationRecordLink } from './task-ui'
 const STAGE_CAP = 6
 const PILE_CAP = 12
 const PILE_NAMED = 6
+/** Faces per row in the wide pile: unnamed 24px faces, and named 46px cells. */
+const PILE_ROW = 5
+const PILE_ROW_NAMED = 3
 const WIDE = 480
 const PILE_WIDTH = 168
 const STAGE_HEIGHT = { wide: 168, narrow: 160 }
@@ -78,7 +81,10 @@ export function TeamScene({ detail, epochId, progress, ended = false, data, onOp
   const layout = useMemo(() => stageWidth ? layoutScene(shown, hidden, links, leadAppId, stageWidth) : null, [shown, hidden, links, leadAppId, stageWidth])
 
   const onStage = new Set(cast.map(entry => entry.appId))
-  const idle = roster.filter(member => !onStage.has(member.appId))
+  // Off the stage, an offline member is not free for work: its owner's computer would not even receive it.
+  const offStage = roster.filter(member => !onStage.has(member.appId))
+  const idle = offStage.filter(member => member.presence !== 'offline')
+  const offline = offStage.filter(member => member.presence === 'offline')
   const talking = new Set(links.flatMap(link => [link.a, link.b]))
   const state = new Map(cast.map(entry => [entry.appId, entry.state]))
   const nameOf = (appId: string) => progressMemberName(roster, appId, t)
@@ -97,6 +103,7 @@ export function TeamScene({ detail, epochId, progress, ended = false, data, onOp
     if (count('failed')) chips.push({ text: t('{{count}} ran into a problem', { count: count('failed') }), tone: 'text-destructive', dot: 'bg-destructive' })
     if (talking.size) chips.push({ text: t('{{count}} talking', { count: talking.size }), dot: 'border-2 border-primary bg-transparent' })
     chips.push({ text: t('{{count}} on standby', { count: idle.length }), dot: 'bg-faint-foreground' })
+    if (offline.length) chips.push({ text: t('{{count}} offline', { count: offline.length }), dot: 'border-[1.5px] border-faint-foreground bg-transparent' })
   } else {
     chips.push({ text: t('No one is working on it right now · {{count}} took part', { count: cast.length || roster.filter(member => tookPart.has(member.appId)).length }) })
   }
@@ -149,7 +156,7 @@ export function TeamScene({ detail, epochId, progress, ended = false, data, onOp
             className="team-scene-move absolute left-0 top-0 flex items-center justify-center rounded-full border border-dashed border-border text-[11.5px] tabular-nums text-subtle-foreground">+{layout.more.count}</span>}
         </div>}
       </div>
-      <IdlePile members={idle} tookPart={tookPart} wide={wide} nameOf={nameOf} onOpenMember={onOpenMember} t={t} />
+      <IdlePile idle={idle} offline={offline} tookPart={tookPart} wide={wide} onOpenMember={onOpenMember} t={t} />
     </div>}
     <div className="grid gap-[3px] px-3.5 pb-1.5 pt-1.5">
       {latest && <button type="button" onClick={() => onOpenExchange(latest.activity.id)} className="block w-full truncate rounded text-left text-xs text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
@@ -169,34 +176,56 @@ function SingleLabel({ appId, state, lead, name, lines, t }: { appId: string; st
   </>
 }
 
-/** Members not on the task, faded; a green dot marks those who did their part. */
-function IdlePile({ members, tookPart, wide, nameOf, onOpenMember, t }: {
-  members: readonly RosterMember[]; tookPart: ReadonlySet<string>; wide: boolean
-  nameOf: (appId: string) => string; onOpenMember: (appId: string) => void; t: TFunction
+/**
+ * Members not on the task, faded: those free for work, then those whose owner's
+ * computer is offline, greyed in their own group. A green dot marks those who did their part.
+ */
+function IdlePile({ idle, offline, tookPart, wide, onOpenMember, t }: {
+  idle: readonly RosterMember[]; offline: readonly RosterMember[]; tookPart: ReadonlySet<string>; wide: boolean
+  onOpenMember: (appId: string) => void; t: TFunction
 }) {
-  const shown = members.slice(0, PILE_CAP)
-  const rest = members.length - shown.length
-  const named = members.length <= PILE_NAMED
-  const size = named ? 28 : 24
-  return <div className={`shrink-0 overflow-hidden ${wide ? 'py-2 pl-3 pr-1.5' : 'px-1 pb-1 pt-2.5'}`}
+  const split = offline.length > 0
+  // The pile keeps the stage's height, so a second group costs room: names stay only
+  // while each group fits one named row, and the faces cap at two rows free, one offline.
+  const named = idle.length + offline.length <= PILE_NAMED && (!split || (idle.length <= PILE_ROW_NAMED && offline.length <= PILE_ROW_NAMED))
+  const groups = [
+    // With everyone else offline, there is no free group to announce.
+    ...(idle.length || !split ? [{ key: 'idle', title: t('On standby · {{count}}', { count: idle.length }), members: idle, slots: split ? PILE_ROW * 2 : PILE_CAP + 1 }] : []),
+    ...(split ? [{ key: 'offline', title: t('Offline · {{count}}', { count: offline.length }), members: offline, slots: PILE_ROW }] : []),
+  ]
+  // Narrow, the pile is a short strip under the stage, so the two groups sit side by side.
+  return <div className={`shrink-0 overflow-hidden ${wide ? 'py-2 pl-3 pr-1.5' : 'flex gap-5 px-1 pb-1 pt-2.5'}`}
     style={wide ? { width: PILE_WIDTH, height: STAGE_HEIGHT.wide } : { height: NARROW_PILE_HEIGHT }}>
-    <h4 className="mb-2 text-xs font-medium text-subtle-foreground">{t('On standby · {{count}}', { count: members.length })}</h4>
-    {!members.length ? <p className="text-xs text-faint-foreground">{t('Everyone is on this task')}</p>
-      : <div className={`flex flex-wrap ${named ? 'gap-x-1.5 gap-y-2' : 'gap-1.5'}`}>
-        {shown.map(member => {
-          const took = tookPart.has(member.appId)
-          const offline = member.presence === 'offline'
-          const text = `${member.memberName} · ${took ? t('Did their part') : offline ? t('Offline') : t('On standby')}`
-          return <button key={member.appId} type="button" onClick={() => onOpenMember(member.appId)} title={text} aria-label={text}
-            className={`flex flex-col items-center gap-0.5 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${named ? 'w-[46px]' : ''}`}>
-            <span className="relative flex">
-              <span className={`flex ${offline ? 'opacity-40 grayscale' : 'opacity-60 saturate-[.45]'}`}><AutomationAvatar name={member.memberName} size={size} /></span>
-              {took && <i aria-hidden="true" data-tone="done" data-size="small" className="avatar-status-dot" />}
-            </span>
-            {named && <span className="max-w-[46px] truncate text-[10.5px] text-faint-foreground">{member.memberName}</span>}
-          </button>
-        })}
-        {rest > 0 && <span className="flex h-[22px] min-w-[22px] items-center justify-center self-start rounded-full bg-secondary px-1.5 text-[11px] tabular-nums text-subtle-foreground">+{rest}</span>}
-      </div>}
+    {groups.map(group => <div key={group.key} className={wide ? '[&+&]:mt-2.5' : group.key === 'idle' ? 'min-w-0 flex-1' : 'shrink-0'}>
+      <h4 className="mb-2 text-xs font-medium text-subtle-foreground">{group.title}</h4>
+      {!group.members.length ? <p className="text-xs text-faint-foreground">{t('Everyone is on this task')}</p>
+        : <PileFaces members={group.members} slots={group.slots} offline={group.key === 'offline'} named={named} tookPart={tookPart} onOpenMember={onOpenMember} t={t} />}
+    </div>)}
+  </div>
+}
+
+/** At most `slots` items, the "+N" chip included. */
+function PileFaces({ members, slots, offline, named, tookPart, onOpenMember, t }: {
+  members: readonly RosterMember[]; slots: number; offline: boolean; named: boolean; tookPart: ReadonlySet<string>
+  onOpenMember: (appId: string) => void; t: TFunction
+}) {
+  const shown = members.length <= slots ? members : members.slice(0, slots - 1)
+  const rest = members.length - shown.length
+  const size = named ? 28 : 24
+  return <div className={`flex flex-wrap ${named ? 'gap-x-1.5 gap-y-2' : 'gap-1.5'}`}>
+    {shown.map(member => {
+      const took = tookPart.has(member.appId)
+      const text = `${member.memberName} · ${offline ? t('Offline') : took ? t('Did their part') : t('On standby')}`
+      return <button key={member.appId} type="button" onClick={() => onOpenMember(member.appId)} title={text} aria-label={text}
+        className={`flex flex-col items-center gap-0.5 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${named ? 'w-[46px]' : ''}`}>
+        <span className="relative flex">
+          {/* Only offline is greyed: a member merely off this task keeps its colours, so standing by never reads as offline. */}
+          <span className={`flex ${offline ? 'opacity-40 grayscale' : ''}`}><AutomationAvatar name={member.memberName} size={size} /></span>
+          {took && <i aria-hidden="true" data-tone="done" data-size="small" className="avatar-status-dot" />}
+        </span>
+        {named && <span className="max-w-[46px] truncate text-[10.5px] text-faint-foreground">{member.memberName}</span>}
+      </button>
+    })}
+    {rest > 0 && <span className="flex h-[22px] min-w-[22px] items-center justify-center self-start rounded-full bg-secondary px-1.5 text-[11px] tabular-nums text-subtle-foreground">+{rest}</span>}
   </div>
 }

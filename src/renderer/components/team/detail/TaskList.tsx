@@ -66,7 +66,10 @@ export function TaskList({ wide, detail, tasks, filters, onFilters, selectedId, 
     let chatRunning = false
     for (const task of sorted) {
       const key = states.get(task.epochId)!.key
-      if (!isTeamWork(task) && !needsUser(key)) {
+      // A periodic check keeps the task going between its runs, so it stays with the work in progress
+      // whatever it is doing right now; only a question or failure for the person files it higher.
+      if (task.checkCount && !needsUser(key)) moving.push(task)
+      else if (!isTeamWork(task) && !needsUser(key)) {
         chats.push(task)
         chatRunning ||= isMoving(key)
       } else if (key === 'waiting_user') yours.push(task)

@@ -3,7 +3,7 @@ import { executionTurns } from '../../../src/renderer/components/team/workbench/
 import { failureCause, progressSummary, taskProgress } from '../../../src/renderer/components/team/workbench/progress'
 import { failureFix } from '../../../src/renderer/components/team/workbench/progress-labels'
 import { describe, expect, it } from 'vitest'
-import { taskConversationRows, COLLABORATION_PREVIEW_LIMIT, conversationMessages, activityLevel, taskGroup, visibleTasks, taskActivityRows, filterTaskActivityRows, taskReportMessages, isTeamBackgroundTurn, decisionMessageId, sharedTaskDecisions, taskParticipants, reportGaps } from '../../../src/renderer/components/team/workbench/model'
+import { taskConversationRows, COLLABORATION_PREVIEW_LIMIT, conversationMessages, activityLevel, taskGroup, visibleTasks, taskActivityRows, filterTaskActivityRows, taskReportMessages, isTeamBackgroundTurn, decisionMessageId, sharedTaskDecisions, taskParticipants, reportGaps, isCheckRunRow, type ConversationRow } from '../../../src/renderer/components/team/workbench/model'
 import { undeliveredParties } from '../../../src/shared/apps/team-failures'
 import { conversationLabel } from '../../../src/renderer/components/team/run-history'
 import { isTeamWork, liveTaskCount, memberState, settingsFailure, sortByState, taskState } from '../../../src/renderer/components/team/detail/status'
@@ -248,6 +248,33 @@ describe('conversation collaboration awareness', () => {
     expect((compact[compact.length - 1] as { openers?: TeamActivity[] }).openers?.map(row => row.id)).toEqual(['before'])
     const full = taskConversationRows([human, reply, arrival] as never, events, 'task', 'kb')
     expect((full[full.length - 1] as { openers?: TeamActivity[] }).openers?.map(row => row.id)).toEqual(['before', 'mid-turn'])
+  })
+  it('on the homepage, names what a reply received mid-turn beside what it sent, as one exchange', () => {
+    const human = { ...received, id: 'human', content: 'Go', timestamp: new Date(500).toISOString(), metadata: { teamTriggerKind: 'human_message' } }
+    const arrival = { id: 'arrived', role: 'system' as const, source: 'team-message' as const, content: 'Draft ready', timestamp: new Date(1000).toISOString(), metadata: { teamId: 'team', fromMemberName: 'Writer', inputMode: 'live' as const, inputReplyId: 'reply', correlationId: 'mid-turn' } }
+    const reply = { id: 'reply', role: 'assistant' as const, content: 'Done', timestamp: new Date(3000).toISOString() }
+    const events = [
+      update('to-writer', { actorAppId: 'kb', targetAppId: 'writer', kind: 'message', correlationId: 'ask', createdAt: 700 }),
+      update('mid-turn', { actorAppId: 'writer', targetAppId: 'kb', correlationId: 'mid-turn', createdAt: 1000 }),
+    ]
+    const compact = taskConversationRows([human, reply, arrival] as never, events, 'task', 'kb', [], { compact: true })
+    const last = compact[compact.length - 1] as { dispatches?: TeamActivity[]; received?: TeamActivity[]; openers?: TeamActivity[] }
+    expect(last.dispatches?.map(row => row.id)).toEqual(['to-writer'])
+    expect(last.received?.map(row => row.id)).toEqual(['mid-turn'])
+    expect(last.openers).toBeUndefined()
+  })
+  it('on the homepage, draws what a member reported under the turn that reported it', () => {
+    const human = { ...received, id: 'human', content: 'Go', timestamp: new Date(500).toISOString(), metadata: { teamTriggerKind: 'human_message' } }
+    const reply = { id: 'reply', role: 'assistant' as const, content: 'Delivered', timestamp: new Date(3000).toISOString() }
+    const events = [
+      update('report:e1', { kind: 'finding', actorAppId: 'kb', targetAppId: null, subject: 'The draft', body: 'The draft in full', status: 'ok', createdAt: 2000 }),
+      update('report:other', { kind: 'finding', actorAppId: 'writer', targetAppId: null, subject: 'Not mine', status: 'ok', createdAt: 2100 }),
+      update('finding-1', { kind: 'finding', actorAppId: 'kb', targetAppId: null, subject: 'A board finding', status: 'ok', createdAt: 2200 }),
+    ]
+    const compact = taskConversationRows([human, reply] as never, events, 'task', 'kb', [], { compact: true })
+    expect(compact.map(row => row.id)).toEqual(['message:human', 'message:reply'])
+    expect((compact[1] as { reports?: TeamActivity[] }).reports?.map(row => row.id)).toEqual(['report:e1'])
+    expect(taskConversationRows([human, reply] as never, events, 'task', 'kb').some(row => row.activities?.some(activity => activity.kind === 'finding'))).toBe(false)
   })
   it('on the homepage, shows replies to teammates as dialogue before the user ever writes', () => {
     const reply = { ...received, id: 'reply', role: 'assistant' as const, content: 'Found 29 items', timestamp: new Date(3000).toISOString() }
@@ -583,5 +610,21 @@ describe('reports that cannot be read', () => {
   it('never lowers a failure while the computer is reachable, involved or not', () => {
     const gaps = reportGaps(['design', 'requirements'], roster, new Set())
     expect(gaps).toEqual({ offline: [], failed: ['design', 'requirements'], elsewhere: [] })
+  })
+})
+
+describe('isCheckRunRow', () => {
+  const at = (n: number) => new Date(n * 1000).toISOString()
+  const reply = (id: string, extra: Record<string, unknown> = {}, kind?: string) => ({ id, role: 'assistant' as const, content: `reply ${id}`, timestamp: at(1), ...(kind ? { metadata: { teamTriggerKind: kind } } : {}), ...extra })
+  const row = (message: ReturnType<typeof reply>, extra: Record<string, unknown> = {}) => ({ id: `message:${message.id}`, message, ...extra }) as unknown as ConversationRow
+
+  it('draws a reply to a periodic check as its own line, and an ordinary reply as a reply', () => {
+    expect(isCheckRunRow(row(reply('c1', {}, 'periodic_check')))).toBe(true)
+    expect(isCheckRunRow(row(reply('talk')))).toBe(false)
+  })
+
+  it('keeps a failed run, and a run that carries handed-on messages, as full rows', () => {
+    expect(isCheckRunRow(row(reply('bad', { error: 'boom' }, 'periodic_check')))).toBe(false)
+    expect(isCheckRunRow(row(reply('sent', {}, 'periodic_check'), { dispatches: [{ id: 'd' }] }))).toBe(false)
   })
 })

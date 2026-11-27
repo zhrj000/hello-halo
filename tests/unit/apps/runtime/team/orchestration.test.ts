@@ -876,6 +876,27 @@ describe('TeamOrchestration', () => {
       expect(store.getTeamById(TEAM_ID)?.currentEpochId).toBe(epoch.id)
     })
 
+    it('stamps recency for a turn, but not for an ambient wake such as a periodic check', async () => {
+      seedTeam(store)
+      const { deps } = makeSession()
+      const orch = build(deps)
+      const epoch = orch.ensureConversationEpoch(TEAM_ID, 'wecom:chat-recency')
+      const stampOf = () => store.getEpochById(epoch.id)!.lastActivityAt ?? 0
+      const before = stampOf()
+
+      vi.useFakeTimers()
+      try {
+        vi.setSystemTime(before + 3_600_000)
+        expect(orch.noteEpochTurn(TEAM_ID, epoch.id, false, { ambient: true })).toBe(true)
+        expect(stampOf()).toBe(before)
+
+        orch.noteEpochTurn(TEAM_ID, epoch.id, false)
+        expect(stampOf()).toBe(before + 3_600_000)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
     it('wakes a sealed CONVERSATION epoch without taking currentEpochId', async () => {
       seedTeam(store)
       const { deps } = makeSession()

@@ -186,8 +186,12 @@ talking members overlap in a ring (pair, triangle, square, then circle), each st
 dot staying at its own face's bottom-right and layered with that face, so a face in
 front may cover a neighbour's dot but no dot floats on another face, the lead marked by a bold name, everyone else standing alone with its state under its name when
 it is waiting, failed or offline (working and done say it by their dot or check alone); at most the lead and six others, never splitting a pair, then "+N".
-Beside it (below when narrow), parted by space rather than a rule, the members not on the task stand faded, a green check on
-those who did their part. Once the task is finished the scene shows no live state (a failure or wait along the way stays in the steps): the stage keeps
+Beside it (below when narrow), parted by space rather than a rule, the members not on the task stand in their own colours (only offline faces are greyed, so
+standing by never reads as offline), a green check on those who did their part. Those whose owner's computer is offline are not free for work, so
+they leave the standby group for an "Offline · N" group of greyed faces under it (beside it
+when narrow) and the header counts them apart ("N offline", a hollow dot); the pile keeps the
+stage's height, so names stay only while each group fits one row, and faces cap at two rows
+free and one offline before "+N". Once the task is finished the scene shows no live state (a failure or wait along the way stays in the steps): the stage keeps
 those who did the work (the lead first, each with a green check) and the pile holds
 only those who took no part. Unfinished work nobody is on keeps the scene too, never an empty stage: the stage holds the lead and those who took part, standing in a line, a check only on those whose part is done and "On standby" under the rest; work a person ended unfinished shows them the same way with no checks, as no one earned one. Only open subtasks show it stopped partway: its brief then says where it stopped (the open step, or how many are left) with a way back into the conversation, and its row says no one is carrying it on. Team work with no open subtask makes no such claim, since nothing tells whether it is finished; it reads "Idle" with its latest summary. End task closes the status line as quiet text behind a small stop square (ending changes the state that line reports, and the header keeps one action) for team work that is not running, waiting on others included, only on the machine hosting the team, never on a plain Q&A chat (nothing to stop) or an IM chat (its next message would start a fresh session rather than pick the task up). Ending work with at least one subtask, all of them done, files it as finished, not as ended by hand, even when it had stopped or failed before; anything else, work with no subtask included, is ended by hand. Ending asks first with a red confirm, naming who started the task when that was someone else; ending work that waits on others withdraws the confirmations still waiting on someone, on their machines too, and the confirm says so. A person's new message picks ended work up again. Ended work files under Completed in gray as "Ended by me" or "Ended by <name>" ("Ended manually" when who ended it cannot be told), with no success summary. On the stage a done badge is a check, never a bare green dot, which
 would read as "online" there, a little larger than the other dots so the check stays legible;
@@ -280,7 +284,7 @@ never by a member-wide waiting flag. On the homepage the member selector sits ab
 the ordinary chat composer's width with no divider; the message stream uses that same width, and the composer placeholder names the selected member. It is an avatar
 rail: one click on an avatar switches member, the selected member is lifted onto a sliding
 thumb with its name unfolded, and a read-only member's face carries a light veil with a
-lock at its center (`.avatar-lock-badge`, under the status dot; the panel's avatar
+lock at its center (the `[data-lock]` overlay, under the status dot; the panel's avatar
 carries it too, the tip card's does not), so who can be talked to reads at a glance. Selecting a read-only member
 keeps its locked composer, which names whose digital human it is and that the user
 reaches it through one of their own, and offers to talk to that one instead, the
@@ -289,18 +293,27 @@ Avatar status is scoped to this conversation: a steady dot at the avatar's corne
 (`.avatar-status-dot`, a quarter of the avatar so it keeps one proportion at every size),
 blue while the member has a busy row for this execution, orange while one of my
 members has a pending question here, red after a failure; the panel's avatars carry the same dot.
-An unselected avatar's card (hover-capable pointers and keyboard focus, never touch)
-opens from the bar's left edge on the panel's surface (a card, not a dark tooltip):
-avatar with name and lead/role, duty, its state in this conversation (read-only
-members included) and, below a divider, who may message it with the owner's offline
-state. It holds no actions; those stay in the panel. The rail is left-aligned so switching never shifts the avatars before the
+Every avatar's card, the selected one's included (hover-capable pointers and keyboard
+focus, never touch), opens from the bar's left edge on the panel's surface (a card, not
+a dark tooltip): avatar with name and lead/role, its state in this conversation
+(read-only members included), the duty in this team and, for a digital human of this
+computer, its own description, both in full (they scroll inside the card past a
+height, never clipped), then below a divider who may message it with the owner's
+offline state. The card is a surface of its own (`MemberRailCard`): the pointer can
+cross onto it (a bridge covers the gap and it gives way only after a short grace), and
+the whole card, or "View details" in its header for the keyboard, opens the member's
+profile in the team progress (`profileAppId` reveal). Switching member and answering
+stay on the avatar and in the panel. The rail is left-aligned so switching never shifts the avatars before the
 selected one, and it fits the width left beside the status (at most eight avatars);
 larger teams collapse the rest behind a "+N" chip. The all-members panel opens upward
 from the bar's left edge: an "All members" header (the done count and bar stay on
 the bar itself, not repeated here), then every
 member grouped into needs your attention (waiting for me or failed), working, my
 digital humans and other read-only members, each with what it needs or is doing; a
-waiting member offers Answer, a failed one View. Search appears past eight members;
+waiting member offers Answer, a failed one View. A member whose owner's computer is
+offline has a faded face and reads "Offline · owner" instead of its stale work, and
+never sits under working; on the rail its face fades the same way, without the
+working dot, and its card drops the stale work for the offline line. Search appears past eight members;
 keyboard navigation always, without on-screen key hints. It has no footer: the team
 progress is the status's job, never a second step through the member list. The current member, my members waiting for me and recently picked members
 (kept in memory only) stay on the rail; shown avatars keep team order and never trade

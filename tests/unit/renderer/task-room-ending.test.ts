@@ -18,6 +18,7 @@ vi.mock('../../../src/renderer/components/apps/EscalationCard', () => ({ Escalat
 vi.mock('../../../src/renderer/components/apps/AutomationAvatar', () => ({ AutomationAvatar: () => null }))
 vi.mock('../../../src/renderer/components/chat/InjectionAnnotation', () => ({ InjectionAnnotation: () => null }))
 vi.mock('../../../src/renderer/components/chat/team-collab', () => ({ DispatchLine: () => null, OpenersLine: () => null }))
+vi.mock('../../../src/renderer/components/team/workbench/ReportCard', () => ({ ReportCard: () => null }))
 
 import { TaskConversation } from '../../../src/renderer/components/team/workbench/TaskConversation'
 

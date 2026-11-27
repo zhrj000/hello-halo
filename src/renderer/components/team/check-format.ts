@@ -28,3 +28,7 @@ export function describeRhythm(
       return new Date(schedule.once).toLocaleString()
   }
 }
+
+
+/** The stop every surface offers on a check; shared with all standing work. */
+export { STANDING_STOP_BUTTON as CHECK_STOP_BUTTON } from '../chat/StandingWork'

@@ -92,6 +92,8 @@ export interface TeamTaskViewMemory {
   open?: Record<string, boolean>
   /** The member whose execution was open. */
   memberAppId?: string
+  /** The member whose profile was open on the members page. */
+  profileAppId?: string
   /** Everyone's exchanges were open. */
   allMembers?: boolean
 }
@@ -132,9 +134,10 @@ export interface RevealRequest {
   side?: 'before' | 'after'
   /** Changes view only: the sub-page to show. */
   page?: 'overview'
-  /** Team task view only: a team record to show, or the member whose work to show. */
+  /** Team task view only: a team record to show, the member whose work to show, or the member whose profile to show. */
   activityId?: string
   memberAppId?: string
+  profileAppId?: string
 }
 
 export type RevealTarget = Omit<RevealRequest, 'seq'>
