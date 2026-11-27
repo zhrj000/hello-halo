@@ -12,10 +12,11 @@
  */
 
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, memo } from 'react'
+import { useAppRemindersStore, useConversationReminders } from '../../stores/app-reminders.store'
 import { createPortal } from 'react-dom'
 import { useShallow } from 'zustand/react/shallow'
 import { Plus } from '../icons/ToolIcons'
-import { EllipsisVertical, Pin, Pencil, Trash2, ChevronRight } from 'lucide-react'
+import { EllipsisVertical, Pin, Pencil, Trash2, ChevronRight, Timer } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { useChatStore, useAllConversationStatuses } from '../../stores/chat.store'
 import { useSpaceStore } from '../../stores/space.store'
@@ -27,13 +28,13 @@ import {
 } from '../../stores/conversation-list-prefs.store'
 import { SCROLLING_SECTIONS, STICKY_HEADING_PX, useConversationReveal } from './conversation-list-reveal'
 import { usePaneResize, PaneResizeHandle } from './conversation-list-panes'
-import { LIST_PEEK, MORE_STEP, attentionFirst, attentionRank, headingStatus, nextShown, peek, rowRank, type HeldRow, type Peeked } from './conversation-list-model'
+import { MORE_STEP, attentionFirst, attentionRank, headingStatus, nextShown, peek, rowRank, type HeldRow, type Peeked } from './conversation-list-model'
 import { api } from '../../api'
 import { cn } from '../../lib/utils'
 import { TaskStatusDot } from '../pulse/TaskStatusDot'
 import { AutomationAvatar } from '../apps/AutomationAvatar'
 import { useAppChatConversationRows, type AppChatConversationRow } from '../../hooks/useAppChatConversationRows'
-import { appChatSessionLabel, formatRowTime, taskStatusLabel, type RowHoverCard } from './conversation-row-format'
+import { appChatSessionLabel, formatRowTime, type RowHoverCard } from './conversation-row-format'
 import { appChatAppId, parseAppChatKey } from '../../../shared/apps/im-keys'
 import { NATIVE_SESSION_CHANNEL, NATIVE_DEFAULT_CHAT_ID } from '../../../shared/types/im-channel'
 import type { ConversationMeta, TaskStatus } from '../../types'
@@ -45,7 +46,9 @@ import { teamTaskKey } from '../../stores/team-chat-pins.store'
 import { teamTaskStatus, useTeamChatSeenStore } from '../../stores/team-chat-seen.store'
 import { TeamConversationRow } from './TeamConversationRow'
 import { ConversationGroupHeader } from './ConversationGroupHeader'
-import { TeamAvatar } from '../team/TeamAvatar'
+import { ConversationHoverCard, type ConversationHoverCardHandle } from './ConversationHoverCard'
+import { sameRowProps } from './row-memo'
+import { useFocusedRow, useRowHeights, useScrollWindow, windowRows } from './conversation-list-window'
 
 // Width constraints (in pixels)
 const MIN_WIDTH = 140
@@ -84,9 +87,11 @@ function hoverCardFor(
   status: TaskStatus,
 ): RowHoverCard {
   if (row.type === 'dh-item') {
+    const reminders = (useAppRemindersStore.getState().byApp[row.row.appId] ?? []).filter(reminder => reminder.conversationId === row.row.id && reminder.nextAt !== null).length
     return {
       label: appChatSessionLabel(row.row, t),
       owner: row.row.digitalHumanName,
+      ...(reminders ? { checks: t('Reminders: {{n}}', { n: reminders }) } : {}),
       time: formatRowTime(row.row.updatedAt, t),
       status,
     }
@@ -146,6 +151,11 @@ const ROW_TIME = 'shrink-0 text-[11px] font-normal tabular-nums text-faint-foreg
 // focus), since their fade-in backdrop is the row's highlight colour.
 const ROW_ACTIONS = 'absolute inset-y-0 right-1.5 flex items-center gap-0.5 pl-5 bg-[linear-gradient(to_right,transparent,hsl(var(--secondary))_20px)] opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto group-data-[menu-open]:opacity-100 group-data-[menu-open]:pointer-events-auto has-[:focus-visible]:opacity-100 has-[:focus-visible]:pointer-events-auto'
 // `theme-dark:` rows win over plain state variants, so the open-menu text is restated for dark.
+// A row of the scrolling column. Only rows near the viewport are mounted (see
+// conversation-list-window), so there is no per-row containment to pay for.
+const LIST_ROW = 'flow-root px-2 pb-0.5'
+// A dot of the folded strip: 24px tall, 2px apart (the strip's gap-0.5).
+const STRIP_DOT_PX = 26
 const ROW_HIGHLIGHT = 'data-[menu-open]:bg-secondary data-[menu-open]:text-foreground theme-dark:data-[menu-open]:text-foreground has-[:focus-visible]:bg-secondary'
 
 /**
@@ -277,6 +287,267 @@ function digitalHumansAtWork(
     if (appId) working.add(appId)
   }
   return working
+}
+
+/** What the one row being renamed needs; the other rows get none, so typing renders that row alone. */
+interface RowEdit {
+  title: string
+  onTitle: (title: string) => void
+  inputRef: (input: HTMLInputElement | null) => void
+  containerRef: React.RefObject<HTMLDivElement>
+  onKeyDown: (e: React.KeyboardEvent) => void
+  onBlur: (e: React.FocusEvent<HTMLInputElement>) => void
+  onSave: () => void
+}
+
+/** Row handlers, all stable for the life of the list, so rows can skip rendering. */
+interface RowHandlers {
+  onOpenMenu: (e: React.MouseEvent, id: string) => void
+  onHover: (el: HTMLElement, card: RowHoverCard) => void
+  onHoverEnd: () => void
+}
+
+/**
+ * A regular conversation. Memoized by content: it renders only when its own
+ * conversation, status, selection, menu or rename changes, not on every render
+ * of the list (a status anywhere, the menu opening on another row, a drag).
+ */
+const ConversationItemRow = memo(function ConversationItemRow({ conversation, status, active, menuOpen, edit, onSelect, onTogglePin, onOpenMenu, onHover, onHoverEnd }: RowHandlers & {
+  conversation: ConversationMeta
+  status: TaskStatus
+  /** currentConversationId stays pointed at the last regular conversation
+   * even while a digital human is selected (switching back lands there
+   * unchanged) — so the caller passes false during that time, or it and the
+   * digital-human's row would both show selected at once. */
+  active: boolean
+  menuOpen: boolean
+  edit?: RowEdit
+  onSelect: (conversation: ConversationMeta) => void
+  onTogglePin: (e: React.MouseEvent, conversation: ConversationMeta) => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <div
+      onClick={() => !edit && onSelect(conversation)}
+      onMouseEnter={(e) => onHover(e.currentTarget, hoverCardFor({ type: 'item', key: conversation.id, conversation }, t, status))}
+      onMouseLeave={onHoverEnd}
+      aria-current={active}
+      data-menu-open={menuOpen || undefined}
+      className={cn(
+        'group relative flex w-full items-center gap-1.5 rounded-sm pl-2.5 pr-1.5 py-1.5 text-[13px] transition-colors ease-halo cursor-pointer',
+        ROW_HIGHLIGHT,
+        active
+          ? 'bg-secondary text-foreground font-medium'
+          // Rows are read, not just scanned: darker than the section labels in
+          // light, the brighter secondary tone in dark; the selected one is marked by its fill.
+          : 'text-foreground/80 hover:bg-secondary hover:text-foreground theme-dark:text-muted-foreground theme-dark:hover:text-foreground'
+      )}
+    >
+
+      {edit ? (
+        <div ref={edit.containerRef} className="flex flex-1 items-center gap-1" onClick={(e) => e.stopPropagation()}>
+          <input
+            ref={edit.inputRef}
+            type="text"
+            value={edit.title}
+            onChange={(e) => edit.onTitle(e.target.value)}
+            onKeyDown={edit.onKeyDown}
+            onBlur={edit.onBlur}
+            className="flex-1 text-sm bg-input border border-border rounded px-2 py-1 focus:outline-none focus:border-primary min-w-0"
+            placeholder={t('Conversation title...')}
+          />
+          <button
+            onClick={edit.onSave}
+            className="p-1 hover:bg-primary/20 text-primary rounded transition-colors flex-shrink-0"
+            title={t('Save')}
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+            </svg>
+          </button>
+        </div>
+      ) : (
+        <>
+          {/* Status dot — inline, left of the title, only when non-idle
+              (prototype: `.ci-dot`, only rendered when a conversation has
+              a `run`/`done` state). Kept as the existing 4-state
+              TaskStatusDot rather than reduced to the prototype's plain
+              two states — the richer state set is an existing strength
+              by design, not a prototype-vs-implementation mismatch to fix. */}
+          {status !== 'idle' && <TaskStatusDot status={status} size="sm" />}
+
+          <span className={ROW_TITLE}>{conversation.title}</span>
+          <span className={ROW_TIME}>{formatRowTime(conversation.updatedAt, t)}</span>
+
+          <div className={ROW_ACTIONS}>
+            <button
+              onClick={(e) => onTogglePin(e, conversation)}
+              className={cn(
+                'w-[22px] h-[22px] flex-shrink-0 rounded-[6px] flex items-center justify-center transition-colors',
+                conversation.starred
+                  ? 'text-accent-on-dark'
+                  : 'text-faint-foreground hover:bg-surface-hover hover:text-foreground'
+              )}
+              title={conversation.starred ? t('Unpin') : t('Pin')}
+              aria-pressed={conversation.starred}
+            >
+              <Pin className="w-[13px] h-[13px]" strokeWidth={1.8} />
+            </button>
+
+            <button
+              onClick={(e) => onOpenMenu(e, conversation.id)}
+              className="w-[22px] h-[22px] flex-shrink-0 rounded-[6px] flex items-center justify-center text-faint-foreground transition-colors hover:bg-surface-hover hover:text-foreground"
+              title={t('More')}
+            >
+              <EllipsisVertical className="w-[13px] h-[13px]" strokeWidth={1.8} />
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}, sameRowProps)
+
+/**
+ * A digital-human conversation, memoized like ConversationItemRow. An
+ * uninstalled digital human's row fades and no longer opens its chat rather
+ * than disappearing; its avatar still leads to the person's page. Reinstalling
+ * the app restores the row automatically since it's derived live from the apps list.
+ */
+const AppChatItemRow = memo(function AppChatItemRow({ row, standalone, status, active, menuOpen, edit, onSelect, onTogglePin, onOpenMenu, onHover, onHoverEnd }: RowHandlers & {
+  row: AppChatConversationRow
+  standalone: boolean
+  status: TaskStatus
+  active: boolean
+  menuOpen: boolean
+  edit?: RowEdit
+  onSelect: (row: AppChatConversationRow) => void
+  onTogglePin: (e: React.MouseEvent, row: AppChatConversationRow) => void
+}) {
+  const { t } = useTranslation()
+  const sessionLabel = appChatSessionLabel(row, t)
+  const reminders = useConversationReminders(row.uninstalled ? null : row.appId, row.id).length
+  return (
+    <div
+      onClick={() => !edit && !row.uninstalled && onSelect(row)}
+      onMouseEnter={(e) => onHover(e.currentTarget, hoverCardFor({ type: 'dh-item', key: row.id, row, standalone }, t, status))}
+      onMouseLeave={onHoverEnd}
+      aria-current={active && !row.uninstalled}
+      data-menu-open={menuOpen || undefined}
+      className={cn(
+        'group relative flex w-full items-center gap-1.5 rounded-sm pr-1.5 py-1.5 text-[13px] transition-colors ease-halo',
+        ROW_HIGHLIGHT,
+        standalone ? 'pl-2.5' : 'pl-[38px]',
+        row.uninstalled
+          ? 'opacity-40 cursor-not-allowed'
+          : 'cursor-pointer',
+        active && !row.uninstalled
+          ? 'bg-secondary text-foreground font-medium'
+          // Rows are read, not just scanned: darker than the section labels in
+          // light, the brighter secondary tone in dark; the selected one is marked by its fill.
+          : 'text-foreground/80 hover:bg-secondary hover:text-foreground theme-dark:text-muted-foreground theme-dark:hover:text-foreground'
+      )}
+    >
+
+      {standalone && (
+        <PersonAvatarLink
+          appId={row.appId}
+          name={row.digitalHumanName}
+          size={18}
+        />
+      )}
+
+      {status !== 'idle' && <TaskStatusDot status={status} size="sm" className={standalone ? undefined : 'absolute left-[26px] top-1/2 -translate-y-1/2'} />}
+
+      {edit ? (
+        <div ref={edit.containerRef} className="flex flex-1 items-center gap-1" onClick={(e) => e.stopPropagation()}>
+          <input
+            ref={edit.inputRef}
+            type="text"
+            value={edit.title}
+            onChange={(e) => edit.onTitle(e.target.value)}
+            onKeyDown={edit.onKeyDown}
+            onBlur={edit.onBlur}
+            className="flex-1 text-sm bg-input border border-border rounded px-2 py-1 focus:outline-none focus:border-primary min-w-0"
+            placeholder={t('Conversation title...')}
+          />
+        </div>
+      ) : (
+        <span className={ROW_TITLE}>
+          {standalone && row.isDefault ? row.digitalHumanName : sessionLabel}
+        </span>
+      )}
+      {row.status === 'paused' && !edit && (
+        <span className="text-[11px] text-muted-foreground shrink-0">{t('Paused')}</span>
+      )}
+      {/* A static mark, as on a team task: this conversation has reminders standing in it. */}
+      {!edit && reminders > 0 && <span role="img" aria-label={t('Reminders: {{n}}', { n: reminders })} className="shrink-0 text-faint-foreground transition-opacity group-hover:opacity-0 group-data-[menu-open]:opacity-0"><Timer className="h-3 w-3" strokeWidth={1.8} aria-hidden="true" /></span>}
+      {!edit && <span className={ROW_TIME}>{formatRowTime(row.updatedAt, t)}</span>}
+
+      {!row.uninstalled && (
+        <div className={ROW_ACTIONS}>
+          <button
+            onClick={(e) => onTogglePin(e, row)}
+            className={cn(
+              'w-[22px] h-[22px] flex-shrink-0 rounded-[6px] flex items-center justify-center transition-colors',
+              row.starred
+                ? 'text-accent-on-dark'
+                : 'text-faint-foreground hover:bg-surface-hover hover:text-foreground'
+            )}
+            title={row.starred ? t('Unpin') : t('Pin')}
+            aria-pressed={row.starred}
+          >
+            <Pin className="w-[13px] h-[13px]" strokeWidth={1.8} />
+          </button>
+
+          <button
+            onClick={(e) => onOpenMenu(e, row.id)}
+            className="w-[22px] h-[22px] flex-shrink-0 rounded-[6px] flex items-center justify-center text-faint-foreground transition-colors hover:bg-surface-hover hover:text-foreground"
+            title={t('More')}
+          >
+            <EllipsisVertical className="w-[13px] h-[13px]" strokeWidth={1.8} />
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}, sameRowProps)
+
+/** A digital human's group heading; its props are values and stable handlers, so the default compare suffices. */
+const DigitalHumanHeaderRow = memo(function DigitalHumanHeaderRow({ appId, name, uninstalled, collapsed, status, onToggle, onNew }: {
+  appId: string
+  name: string
+  uninstalled: boolean
+  collapsed: boolean
+  status?: TaskStatus
+  onToggle: (appId: string, open: boolean) => void
+  onNew: (appId: string) => void
+}) {
+  const { t } = useTranslation()
+  return <ConversationGroupHeader
+    name={name}
+    collapsed={collapsed}
+    disabled={uninstalled}
+    onToggle={() => {
+      trackHome('home.dh_group.toggle', { collapsed: !collapsed })
+      onToggle(appId, !collapsed)
+    }}
+    onNew={() => onNew(appId)}
+    newLabel={t('New conversation with {{name}}', { name })}
+    avatar={<PersonAvatarLink appId={appId} name={name} size={20} />}
+    status={status && <TaskStatusDot status={status} size="sm" className="ml-1.5" />}
+  />
+})
+
+/**
+ * A handler whose identity never changes but which always runs the latest
+ * `fn`, so memoized rows can take it without rendering again when it is
+ * recreated. Only for event handlers: it is not to be called during render.
+ */
+function useStableHandler<A extends unknown[], R>(fn: (...args: A) => R): (...args: A) => R {
+  const latest = useRef(fn)
+  latest.current = fn
+  return useCallback((...args: A) => latest.current(...args), [])
 }
 
 export const ConversationList = memo(function ConversationList({
@@ -423,33 +694,11 @@ export const ConversationList = memo(function ConversationList({
   const editInputRef = useRef<HTMLInputElement | null>(null)
   const focusedEditingIdRef = useRef<string | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
-  /** Hovered row's identity card — rows truncate their title and the
-   * collapsed rail shows no title at all, so both lean on this. `owner` is
-   * set for a digital human's session. */
-  const [hoverCard, setHoverCard] = useState<(RowHoverCard & {
-    top: number
-    left: number
-  }) | null>(null)
-
-  const showHoverCard = useCallback((
-    el: HTMLElement,
-    card: RowHoverCard,
-  ) => {
-    const r = el.getBoundingClientRect()
-    setHoverCard({ ...card, top: r.top + r.height / 2, left: r.right + 8 })
-  }, [])
-  const hideHoverCard = useCallback(() => setHoverCard(null), [])
-  // Centred on its row, but shifted to stay inside the window — rows near the
-  // bottom (or top) edge would otherwise cut the card off.
-  const hoverCardRef = useRef<HTMLDivElement>(null)
-  useLayoutEffect(() => {
-    const el = hoverCardRef.current
-    if (!el || !hoverCard) return
-    const margin = 8
-    const h = el.offsetHeight
-    const top = Math.min(Math.max(hoverCard.top - h / 2, margin), window.innerHeight - h - margin)
-    el.style.top = `${top}px`
-  }, [hoverCard])
+  /** Hovered row's identity card. Which row is hovered lives in the card, not
+   * here, so moving the pointer between rows renders the card alone. */
+  const hoverCardHandle = useRef<ConversationHoverCardHandle>(null)
+  const showHoverCard = useCallback((el: HTMLElement, card: RowHoverCard) => hoverCardHandle.current?.show(el, card), [])
+  const hideHoverCard = useCallback(() => hoverCardHandle.current?.hide(), [])
 
   // ── What each row needs from the person ──
   const teamSeen = useTeamChatSeenStore(s => s.seen)
@@ -633,6 +882,16 @@ export const ConversationList = memo(function ConversationList({
   const listColumnRef = useRef<HTMLDivElement>(null)
   const pinnedResize = usePaneResize('pinned', reveal.pinnedRef, listColumnRef, () => reveal.pinnedRef.current?.scrollHeight ?? 0)
 
+  // ── Only the rows near the viewport are mounted; the rest are gaps of their height ──
+  const windowScroller = folded ? reveal.stripRef : reveal.scrollerRef
+  const view = useScrollWindow(windowScroller, folded)
+  const rowHeights = useRowHeights()
+  const focusedRow = useFocusedRow(windowScroller, folded)
+  // Mounted wherever they are: the open row (the list scrolls to it by its element),
+  // one whose menu is open or that is being renamed, and the one holding focus.
+  const keepMounted = (key: string) => key === selectedKey || key === held?.key || key === menuOpenId || key === editingId || key === focusedRow.current
+  useLayoutEffect(() => { if (!folded) rowHeights.measure(reveal.scrollerRef.current) })
+
   // ── Headings of sections further down wait at the bottom of the column ──
   const scrollingSections = SCROLLING_SECTIONS.filter(section =>
     (section === 'teams' ? teamRows : section === 'digital-humans' ? digitalHumanRows : conversationRows).length > 0)
@@ -710,17 +969,24 @@ export const ConversationList = memo(function ConversationList({
   useEffect(() => {
     if (!isDragging) return
 
+    // The width follows the pointer on the element itself, and React hears of it
+    // only on release: a render per pointer move would run the whole list again.
+    // React leaves the inline width alone meanwhile, as its `width` prop is unchanged.
     const handleMouseMove = (e: MouseEvent) => {
       if (!containerRef.current) return
       const containerRect = containerRef.current.getBoundingClientRect()
       const newWidth = e.clientX - containerRect.left
       const nextFolded = newWidth < DRAG_COLLAPSE_THRESHOLD
-      dragFoldedRef.current = nextFolded
-      setDragFolded(nextFolded)
-      if (nextFolded) return
       const clampedWidth = clampWidth(newWidth)
-      setWidth(clampedWidth)
-      widthRef.current = clampedWidth
+      if (!nextFolded) widthRef.current = clampedWidth
+      if (nextFolded !== dragFoldedRef.current) {
+        // Crossing the fold swaps the element: render once, at the width reached.
+        dragFoldedRef.current = nextFolded
+        setDragFolded(nextFolded)
+        if (!nextFolded) setWidth(clampedWidth)
+        return
+      }
+      if (!nextFolded) containerRef.current.style.width = `${clampedWidth}px`
     }
 
     const handleMouseUp = () => {
@@ -737,6 +1003,7 @@ export const ConversationList = memo(function ConversationList({
         setWidth(dragStartWidthRef.current)
         return
       }
+      setWidth(widthRef.current)
       if (widthRef.current === dragStartWidthRef.current) return
       // Persist width to in-memory store + backend config
       const currentConfig = useAppStore.getState().config
@@ -938,247 +1205,48 @@ export const ConversationList = memo(function ConversationList({
     }
   }
 
-  // Render a single conversation item
-  const renderConversationItem = useCallback((conversation: ConversationMeta) => {
-    const status = conversationStatuses.get(conversation.id) ?? 'idle'
-    // currentConversationId stays pointed at the last regular conversation
-    // even while a digital human is selected (switching back lands there
-    // unchanged) — so this row must not read as "active" during that time,
-    // or it and the digital-human's row would both show selected at once.
-    const isActive = conversation.id === currentConversationId && !selectedAppChat && !selectedTeamChat
-    const isEditing = editingId === conversation.id
+  // Stable for the life of the list, so the memoized rows below skip rendering
+  // when only the list does; each still runs the latest closure.
+  const onSelectConversation = useStableHandler(handleSelectConversation)
+  const onToggleConversationPin = useStableHandler(handleTogglePin)
+  const onOpenMenu = useStableHandler(openMoreMenu)
+  const onSelectAppChat = useStableHandler(handleSelectAppChat)
+  const onToggleAppChatPinRow = useStableHandler(handleToggleAppChatPin)
+  const onNewAppChat = useStableHandler(handleNewAppChat)
+  const onRefreshTeams = useStableHandler(() => teamList.refresh())
+  const onToggleTeam = useCallback((id: string, open: boolean) => toggleAppCollapsed(`team:${id}`, open), [toggleAppCollapsed])
+  const rowEdit: RowEdit | undefined = editingId ? {
+    title: editingTitle, onTitle: setEditingTitle, inputRef: attachEditInputRef, containerRef: editContainerRef,
+    onKeyDown: handleEditKeyDown, onBlur: handleEditBlur, onSave: handleSaveEdit,
+  } : undefined
 
-    return (
-      <div
-        onClick={() => !isEditing && handleSelectConversation(conversation)}
-        onMouseEnter={(e) => showHoverCard(e.currentTarget, hoverCardFor({ type: 'item', key: conversation.id, conversation }, t, status))}
-        onMouseLeave={hideHoverCard}
-        aria-current={isActive}
-        data-menu-open={menuOpenId === conversation.id || undefined}
-        className={cn(
-          'group relative flex w-full items-center gap-1.5 rounded-sm pl-2.5 pr-1.5 py-1.5 text-[13px] transition-colors ease-halo cursor-pointer',
-          ROW_HIGHLIGHT,
-          isActive
-            ? 'bg-secondary text-foreground font-medium'
-            // Rows are read, not just scanned: darker than the section labels in
-            // light, the brighter secondary tone in dark; the selected one is marked by its fill.
-            : 'text-foreground/80 hover:bg-secondary hover:text-foreground theme-dark:text-muted-foreground theme-dark:hover:text-foreground'
-        )}
-      >
+  const renderConversationItem = (conversation: ConversationMeta) => <ConversationItemRow
+    conversation={conversation}
+    status={conversationStatuses.get(conversation.id) ?? 'idle'}
+    active={conversation.id === currentConversationId && !selectedAppChat && !selectedTeamChat}
+    menuOpen={menuOpenId === conversation.id}
+    edit={editingId === conversation.id ? rowEdit : undefined}
+    onSelect={onSelectConversation} onTogglePin={onToggleConversationPin} onOpenMenu={onOpenMenu}
+    onHover={showHoverCard} onHoverEnd={hideHoverCard} />
 
-        {isEditing ? (
-          <div ref={editContainerRef} className="flex flex-1 items-center gap-1" onClick={(e) => e.stopPropagation()}>
-            <input
-              ref={attachEditInputRef}
-              type="text"
-              value={editingTitle}
-              onChange={(e) => setEditingTitle(e.target.value)}
-              onKeyDown={handleEditKeyDown}
-              onBlur={handleEditBlur}
-              className="flex-1 text-sm bg-input border border-border rounded px-2 py-1 focus:outline-none focus:border-primary min-w-0"
-              placeholder={t('Conversation title...')}
-            />
-            <button
-              onClick={handleSaveEdit}
-              className="p-1 hover:bg-primary/20 text-primary rounded transition-colors flex-shrink-0"
-              title={t('Save')}
-            >
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-              </svg>
-            </button>
-          </div>
-        ) : (
-          <>
-            {/* Status dot — inline, left of the title, only when non-idle
-                (prototype: `.ci-dot`, only rendered when a conversation has
-                a `run`/`done` state). Kept as the existing 4-state
-                TaskStatusDot rather than reduced to the prototype's plain
-                two states — the richer state set is an existing strength
-                by design, not a prototype-vs-implementation mismatch to fix. */}
-            {status !== 'idle' && <TaskStatusDot status={status} size="sm" />}
+  const renderAppChatItem = (row: AppChatConversationRow, standalone: boolean) => <AppChatItemRow
+    row={row}
+    standalone={standalone}
+    status={conversationStatuses.get(row.id) ?? 'idle'}
+    active={row.id === selectedAppChat?.conversationId && !selectedTeamChat}
+    menuOpen={menuOpenId === row.id}
+    edit={editingId === row.id ? rowEdit : undefined}
+    onSelect={onSelectAppChat} onTogglePin={onToggleAppChatPinRow} onOpenMenu={onOpenMenu}
+    onHover={showHoverCard} onHoverEnd={hideHoverCard} />
 
-            <span className={ROW_TITLE}>{conversation.title}</span>
-            <span className={ROW_TIME}>{formatRowTime(conversation.updatedAt, t)}</span>
+  const hoverCardElement = <ConversationHoverCard ref={hoverCardHandle} suppressed={!!editingId || !!menuOpenId} />
 
-            <div className={ROW_ACTIONS}>
-              <button
-                onClick={(e) => handleTogglePin(e, conversation)}
-                className={cn(
-                  'w-[22px] h-[22px] flex-shrink-0 rounded-[6px] flex items-center justify-center transition-colors',
-                  conversation.starred
-                    ? 'text-accent-on-dark'
-                    : 'text-faint-foreground hover:bg-surface-hover hover:text-foreground'
-                )}
-                title={conversation.starred ? t('Unpin') : t('Pin')}
-                aria-pressed={conversation.starred}
-              >
-                <Pin className="w-[13px] h-[13px]" strokeWidth={1.8} />
-              </button>
-
-              <button
-                onClick={(e) => openMoreMenu(e, conversation.id)}
-                className="w-[22px] h-[22px] flex-shrink-0 rounded-[6px] flex items-center justify-center text-faint-foreground transition-colors hover:bg-surface-hover hover:text-foreground"
-                title={t('More')}
-              >
-                <EllipsisVertical className="w-[13px] h-[13px]" strokeWidth={1.8} />
-              </button>
-            </div>
-          </>
-        )}
-      </div>
-    )
-  }, [editingId, editingTitle, currentConversationId, selectedAppChat, selectedTeamChat, conversationStatuses, menuOpenId, t])
-
-  // Render a single digital-human conversation row. An uninstalled digital
-  // human's row fades and no longer opens its chat rather than disappearing;
-  // its avatar still leads to the person's page. Reinstalling the app restores
-  // the row automatically since it's derived live from the apps list each render.
-  const renderAppChatItem = useCallback((row: AppChatConversationRow, standalone: boolean) => {
-    const isActive = row.id === selectedAppChat?.conversationId && !selectedTeamChat
-    const isEditing = editingId === row.id
-    const sessionLabel = appChatSessionLabel(row, t)
-    const status = conversationStatuses.get(row.id) ?? 'idle'
-
-    return (
-      <div
-        onClick={() => !isEditing && !row.uninstalled && handleSelectAppChat(row)}
-        onMouseEnter={(e) => showHoverCard(e.currentTarget, hoverCardFor({ type: 'dh-item', key: row.id, row, standalone }, t, status))}
-        onMouseLeave={hideHoverCard}
-        aria-current={isActive && !row.uninstalled}
-        data-menu-open={menuOpenId === row.id || undefined}
-        className={cn(
-          'group relative flex w-full items-center gap-1.5 rounded-sm pr-1.5 py-1.5 text-[13px] transition-colors ease-halo',
-          ROW_HIGHLIGHT,
-          standalone ? 'pl-2.5' : 'pl-[38px]',
-          row.uninstalled
-            ? 'opacity-40 cursor-not-allowed'
-            : 'cursor-pointer',
-          isActive && !row.uninstalled
-            ? 'bg-secondary text-foreground font-medium'
-            // Rows are read, not just scanned: darker than the section labels in
-            // light, the brighter secondary tone in dark; the selected one is marked by its fill.
-            : 'text-foreground/80 hover:bg-secondary hover:text-foreground theme-dark:text-muted-foreground theme-dark:hover:text-foreground'
-        )}
-      >
-
-        {standalone && (
-          <PersonAvatarLink
-            appId={row.appId}
-            name={row.digitalHumanName}
-            size={18}
-          />
-        )}
-
-        {status !== 'idle' && <TaskStatusDot status={status} size="sm" className={standalone ? undefined : 'absolute left-[26px] top-1/2 -translate-y-1/2'} />}
-
-        {isEditing ? (
-          <div ref={editContainerRef} className="flex flex-1 items-center gap-1" onClick={(e) => e.stopPropagation()}>
-            <input
-              ref={attachEditInputRef}
-              type="text"
-              value={editingTitle}
-              onChange={(e) => setEditingTitle(e.target.value)}
-              onKeyDown={handleEditKeyDown}
-              onBlur={handleEditBlur}
-              className="flex-1 text-sm bg-input border border-border rounded px-2 py-1 focus:outline-none focus:border-primary min-w-0"
-              placeholder={t('Conversation title...')}
-            />
-          </div>
-        ) : (
-          <span className={ROW_TITLE}>
-            {standalone && row.isDefault ? row.digitalHumanName : sessionLabel}
-          </span>
-        )}
-        {row.status === 'paused' && !isEditing && (
-          <span className="text-[11px] text-muted-foreground shrink-0">{t('Paused')}</span>
-        )}
-        {!isEditing && <span className={ROW_TIME}>{formatRowTime(row.updatedAt, t)}</span>}
-
-        {!row.uninstalled && (
-          <div className={ROW_ACTIONS}>
-            <button
-              onClick={(e) => handleToggleAppChatPin(e, row)}
-              className={cn(
-                'w-[22px] h-[22px] flex-shrink-0 rounded-[6px] flex items-center justify-center transition-colors',
-                row.starred
-                  ? 'text-accent-on-dark'
-                  : 'text-faint-foreground hover:bg-surface-hover hover:text-foreground'
-              )}
-              title={row.starred ? t('Unpin') : t('Pin')}
-              aria-pressed={row.starred}
-            >
-              <Pin className="w-[13px] h-[13px]" strokeWidth={1.8} />
-            </button>
-
-            <button
-              onClick={(e) => openMoreMenu(e, row.id)}
-              className="w-[22px] h-[22px] flex-shrink-0 rounded-[6px] flex items-center justify-center text-faint-foreground transition-colors hover:bg-surface-hover hover:text-foreground"
-              title={t('More')}
-            >
-              <EllipsisVertical className="w-[13px] h-[13px]" strokeWidth={1.8} />
-            </button>
-          </div>
-        )}
-      </div>
-    )
-  }, [selectedAppChat?.conversationId, selectedTeamChat, editingId, editingTitle, conversationStatuses, menuOpenId, t])
-
-  // Fixed-positioned and portaled: the row lists scroll, and a scroll
-  // container clips anything reaching past its edge.
-  const hoverStatusLabel = hoverCard?.status ? taskStatusLabel(hoverCard.status, t) : undefined
-  // Three lines, one kind of thing each: whose it is and when (the time always at
-  // the right), the title, then who started it and its state — left out when
-  // there is neither, so a plain conversation's card stays two lines.
-  const hoverFooter = hoverCard ? [
-    hoverCard.note && <span key="note" className="min-w-0 truncate">{hoverCard.note}</span>,
-    hoverCard.status && hoverStatusLabel && <span key="status" className="flex shrink-0 items-center gap-1"><TaskStatusDot status={hoverCard.status} size="sm" />{hoverStatusLabel}</span>,
-  ].filter(Boolean) : []
-  const hoverCardPortal = hoverCard && !editingId && !menuOpenId && createPortal(
-    <div
-      ref={hoverCardRef}
-      role="tooltip"
-      style={{ top: hoverCard.top, left: hoverCard.left }}
-      className="pointer-events-none fixed z-[60] w-max min-w-[160px] max-w-[300px] rounded-lg border border-border-faint bg-popover px-3.5 py-3 shadow-soft"
-    >
-      {(hoverCard.owner || hoverCard.time) && (
-        <span className="mb-1.5 flex items-center gap-3 text-[11px] leading-4 text-faint-foreground">
-          {hoverCard.owner && <span className="flex min-w-0 items-center gap-1.5">
-            {hoverCard.ownerFaces ? <TeamAvatar faces={hoverCard.ownerFaces} name={hoverCard.owner} size={16} /> : <AutomationAvatar name={hoverCard.owner} size={14} />}
-            <span className="truncate">{hoverCard.owner}</span>
-          </span>}
-          {hoverCard.time && <span className="ml-auto shrink-0 tabular-nums">{hoverCard.time}</span>}
-        </span>
-      )}
-      <span className="block text-[13px] font-medium leading-5 text-foreground line-clamp-3">{hoverCard.label}</span>
-      {hoverFooter.length > 0 && (
-        <span className="mt-1.5 flex items-center gap-1.5 overflow-hidden whitespace-nowrap text-[11px] leading-4 text-faint-foreground">
-          {hoverFooter.flatMap((item, index) => index ? [<span key={`sep-${index}`} aria-hidden="true">·</span>, item] : [item])}
-        </span>
-      )}
-    </div>,
-    document.body
-  )
-
-  const renderDigitalHumanHeader = (row: Extract<ConversationRow, { type: 'dh-header' }>) => {
-    const toggle = () => {
-      trackHome('home.dh_group.toggle', { collapsed: !row.collapsed })
-      toggleAppCollapsed(row.appId, !row.collapsed)
-    }
-    return <ConversationGroupHeader
-      name={row.name}
-      collapsed={row.collapsed}
-      disabled={row.uninstalled}
-      onToggle={toggle}
-      onNew={() => handleNewAppChat(row.appId)}
-      newLabel={t('New conversation with {{name}}', { name: row.name })}
-      avatar={<PersonAvatarLink appId={row.appId} name={row.name} size={20} />}
-      status={row.status && <TaskStatusDot status={row.status} size="sm" className="ml-1.5" />}
-    />
-  }
+  const renderDigitalHumanHeader = (row: Extract<ConversationRow, { type: 'dh-header' }>) => <DigitalHumanHeaderRow
+    appId={row.appId} name={row.name} uninstalled={row.uninstalled} collapsed={row.collapsed} status={row.status}
+    onToggle={toggleAppCollapsed} onNew={onNewAppChat} />
 
   const renderTeamRow = (row: TeamListRow, compact = false) => <TeamConversationRow key={row.key} row={row} spaceId={spaceKey}
-    onToggle={(id, open) => toggleAppCollapsed(`team:${id}`, open)} onRefresh={teamList.refresh}
+    onToggle={onToggleTeam} onRefresh={onRefreshTeams}
     onPick={pickRow} onHover={showHoverCard} onHoverEnd={hideHoverCard} compact={compact} />
   const renderMoreRow = (row: Extract<ConversationRow, { type: 'more' }>) => <button type="button" onClick={() => showMore(row)}
     className={cn('flex w-full items-center rounded-sm py-1 pr-1.5 text-left text-xs text-faint-foreground transition-colors ease-halo hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary', row.nested ? 'pl-[38px]' : 'pl-2.5')}>
@@ -1217,7 +1285,9 @@ export const ConversationList = memo(function ConversationList({
             this column scrolls, and a scroll container clips anything
             reaching past its edge. */}
         <div ref={reveal.stripRef} className="flex-1 w-full overflow-y-auto px-2 py-1 flex flex-col items-center gap-0.5">
-          {stripRows?.map(row => {
+          {windowRows(stripRows ?? [], 4, () => STRIP_DOT_PX, view, keepMounted, -2).map(item => {
+            if ('gap' in item) return <div key={item.key} aria-hidden="true" className="w-full flex-shrink-0" style={{ height: item.gap }} />
+            const row = item.row
             if (row.type === 'team-item') return renderTeamRow(row, true)
             if (row.type !== 'item' && row.type !== 'dh-item') return null
             const isAppChat = row.type === 'dh-item'
@@ -1229,6 +1299,7 @@ export const ConversationList = memo(function ConversationList({
             return (
               <button
                 key={row.key}
+                data-row-key={row.key}
                 onClick={() => {
                   if (isAppChat) {
                     if (row.row.uninstalled) openPersonActivity(row.row.appId)
@@ -1260,7 +1331,7 @@ export const ConversationList = memo(function ConversationList({
             )
           })}
         </div>
-        {hoverCardPortal}
+        {hoverCardElement}
         <div
           className={`absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-primary/50 transition-colors z-20 ${
             isDragging ? 'bg-primary/50' : ''
@@ -1272,6 +1343,8 @@ export const ConversationList = memo(function ConversationList({
     )
   }
 
+  /** Running offset of the scrolling column's content while its sections are laid out below. */
+  let contentY = 0
   return (
     <>
     <div
@@ -1315,7 +1388,12 @@ export const ConversationList = memo(function ConversationList({
           { section: 'conversations', rows: conversationRows, open: conversationsOpen, label: t('Conversations'), attention: conversationsAttention, hint: t('Your direct conversations with Halo') },
         ] satisfies Array<{ section: ConversationSection; rows: ConversationRow[]; open: boolean; label: string; attention?: TaskStatus; hint?: string }>)
           .filter(({ rows }) => rows.length > 0)
-          .flatMap(({ section, rows, open, label, attention, hint }, index, all) => [
+          .flatMap(({ section, rows, open, label, attention, hint }, index, all) => {
+            // Where this section's rows start in the column: every heading and row above it.
+            contentY += STICKY_HEADING_PX
+            const items = open ? windowRows(rows, contentY, rowHeights.heightOf, view, keepMounted) : []
+            if (open) for (const row of rows) contentY += rowHeights.heightOf(row)
+            return [
             <div key={`anchor:${section}`} aria-hidden="true" ref={el => { if (el) sectionAnchors.current.set(section, el); else sectionAnchors.current.delete(section) }} />,
             <div key={`heading:${section}`}
               // Centred: stacked on top or waiting at the bottom, each heading sits between dividers.
@@ -1324,8 +1402,11 @@ export const ConversationList = memo(function ConversationList({
               <SectionHeaderButton section={section} label={label} hint={hint} collapsed={!open} attention={attention} onToggle={toggleSection}
                 docked={docked.has(section)} count={sectionCount[section]} onJump={jumpToSection} className="pb-0" />
             </div>,
-            ...(open ? rows.map(row => <div key={row.key} data-row-key={row.key} className="flow-root px-2 pb-0.5">{renderListRow(row)}</div>) : []),
-          ])}
+            ...items.map(item => 'gap' in item
+              ? <div key={item.key} aria-hidden="true" style={{ height: item.gap }} />
+              : <div key={item.row.key} data-row-key={item.row.key} className={LIST_ROW}>{renderListRow(item.row)}</div>),
+          ]
+          })}
         {/* Room after the last row as a spacer, not padding: a sticky heading stops at the
             padding's edge, so the headings waiting at the bottom would let rows show beneath them. */}
         <div aria-hidden="true" className="h-3" />
@@ -1342,7 +1423,7 @@ export const ConversationList = memo(function ConversationList({
       />
     </div>
 
-    {hoverCardPortal}
+    {hoverCardElement}
 
     {/* Dropdown menu — Portal to document.body, fully outside flex layout.
         Pin lives inline on the row now; this keeps rename/delete. */}

@@ -8,7 +8,6 @@ import { useAppsPageStore } from '../../../stores/apps-page.store'
 import { usePeopleViewStore } from '../../../stores/people-view.store'
 import { useTeamStore, useTeamView } from '../../../stores/team.store'
 import { useElementWidth } from '../../../hooks/useElementWidth'
-import { teamAvatarFaces } from '../../../hooks/useTeamConversationRows'
 import { returnToConversation } from '../../../utils/people-navigation'
 import { localTeamSpace, openTeamConversation } from '../../../utils/team-conversation-navigation'
 import { AutomationAvatar } from '../../apps/AutomationAvatar'
@@ -26,6 +25,7 @@ import { OutputsPanel } from './OutputsPanel'
 import { doneThisMonth, liveTaskCount, memberState, type TaskStateKey } from './status'
 import { StateIcon } from './task-ui'
 import { TaskPanel, type TaskPanelReveal } from './TaskPanel'
+import { TeamChecksButton } from './TeamChecks'
 import { NO_TASK_FILTERS, TaskList, type TaskFilters } from './TaskList'
 
 /** The one side panel: a task, the team's outputs, or one member. */
@@ -74,7 +74,7 @@ export function TeamDetailPage({ detail, onBack }: { detail: TeamDetail; onBack?
     .sort((a, b) => b.lastActivityAt - a.lastActivityAt || a.epochId.localeCompare(b.epochId)), [conversations])
   const ownedIds = useMemo(() => ownedTaskMembers(detail, apps).map(member => member.appId), [detail, apps])
   const roster = useMemo(() => [...detail.roster].sort((a, b) => Number(b.isLead) - Number(a.isLead)), [detail.roster])
-  const faces = useMemo(() => teamAvatarFaces(roster), [roster])
+  const mark = useMemo(() => ({ teamId: team.id, members: detail.roster.length }), [team.id, detail.roster.length])
   const docked = width >= DOCK_WIDTH
   const compact = width > 0 && width < COMPACT_WIDTH
   const wide = mainWidth >= WIDE_CONTENT
@@ -210,7 +210,7 @@ export function TeamDetailPage({ detail, onBack }: { detail: TeamDetail; onBack?
   const backLabel = origin ? t('Back to conversation') : t('Back to teams')
   const goBack = () => onBack ? onBack() : origin ? returnToConversation(origin) : useTeamStore.getState().selectTeam(null)
   const back = <button onClick={goBack} aria-label={backLabel} title={backLabel} className={backButton}><ArrowLeft size={18} /></button>
-  const pulse = (!loading || tasks.length > 0) && <TeamPulse detail={detail} tasks={tasks} outputsOpen={outputsOpen} onOpenOutputs={openOutputs} className="min-w-0 overflow-hidden whitespace-nowrap" />
+  const pulse = (!loading || tasks.length > 0) && <TeamPulse detail={detail} tasks={tasks} outputsOpen={outputsOpen} onOpenOutputs={openOutputs} onOpenTask={id => openTask(id)} className="min-w-0 overflow-hidden whitespace-nowrap" />
   // Side by side, the team collapses to one bar over both columns so the list and the panel each scroll on their own.
   const split = panelOpen && docked && !page
   useEffect(() => {
@@ -222,7 +222,7 @@ export function TeamDetailPage({ detail, onBack }: { detail: TeamDetail; onBack?
   const teamBar = (className: string, tools: ReactNode) => <div className={`flex items-center gap-2.5 border-b border-border-soft bg-background px-3 py-2.5 sm:px-4 ${className}`}>
     {back}
     <button onClick={openMembers} aria-label={t('View team members')} title={t('View team members')} className="shrink-0 rounded-full p-0.5 transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
-      <TeamAvatar faces={faces} name={team.name} size={36} />
+      <TeamAvatar mark={mark} size={36} />
     </button>
     <div className="min-w-0 flex-1 text-left">
       <div className="flex min-w-0 items-center gap-2">
@@ -302,8 +302,8 @@ export function TeamDetailPage({ detail, onBack }: { detail: TeamDetail; onBack?
 }
 
 /** Where the team stands in one line: its most pressing state (a failure, a decision for the user, live tasks), then what it finished this month. */
-function TeamPulse({ detail, tasks, outputsOpen, onOpenOutputs, className }: {
-  detail: TeamDetail; tasks: readonly TeamConversation[]; outputsOpen: boolean; onOpenOutputs: () => void; className?: string
+function TeamPulse({ detail, tasks, outputsOpen, onOpenOutputs, onOpenTask, className }: {
+  detail: TeamDetail; tasks: readonly TeamConversation[]; outputsOpen: boolean; onOpenOutputs: () => void; onOpenTask: (epochId: string) => void; className?: string
 }) {
   const { t } = useTranslation()
   const status = detail.team.status
@@ -317,6 +317,7 @@ function TeamPulse({ detail, tasks, outputsOpen, onOpenOutputs, className }: {
   return <p className={`flex items-center gap-1.5 text-[13px] text-subtle-foreground ${className ?? ''}`}>
     <StateIcon state={key} />
     <span className={tone}>{text}</span>
+    {!!detail.checks?.length && <><span aria-hidden="true">·</span><TeamChecksButton detail={detail} onOpenTask={onOpenTask} /></>}
     {done.length > 0 && <span>· {t('{{count}} completed this month', { count: done.length })}</span>}
     {outputs > 0 && <>
       <span aria-hidden="true">·</span>

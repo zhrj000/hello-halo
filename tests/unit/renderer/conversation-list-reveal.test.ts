@@ -115,6 +115,8 @@ class Mount {
 }
 
 /** Every element in the tree, without rendering child components. */
+/** A list row as drawn: memoized rows are rendered once (they hold no state of their own). */
+const drawnRow = (el: any) => (el?.type?.type ? el.type.type(el.props) : el)
 function nodes(tree: any): any[] { if (!tree || typeof tree !== 'object') return []; if (Array.isArray(tree)) return tree.flatMap(nodes); return [tree, ...[tree.props?.children].flat(Infinity).flatMap(nodes)] }
 
 const ROW = 32
@@ -224,15 +226,15 @@ describe('planReveal', () => {
 })
 
 describe('the open conversation in the list', () => {
-  it('shows the first five conversations and the open one past them, scrolled below the sticky heading', () => {
+  it('shows the first ten conversations and the open one past them, scrolled below the sticky heading', () => {
     const list = new Mount()
     const el = attach(list.render())
-    expect(drawnKeys(env.tree)).toEqual(['c00', 'c01', 'c02', 'c03', 'c04', 'more:conversations'])
+    expect(drawnKeys(env.tree)).toEqual(['c00', 'c01', 'c02', 'c03', 'c04', 'c05', 'c06', 'c07', 'c08', 'c09', 'more:conversations'])
 
     openElsewhere('c35')
     list.render()
-    // The open one takes the fifth place, so the count holds.
-    expect(drawnKeys(env.tree)).toEqual(['c00', 'c01', 'c02', 'c03', 'c35', 'more:conversations'])
+    // The open one takes the tenth place, so the count holds.
+    expect(drawnKeys(env.tree)).toEqual(['c00', 'c01', 'c02', 'c03', 'c04', 'c05', 'c06', 'c07', 'c08', 'c35', 'more:conversations'])
     expect(inView(el, 'c35')).toBe(true)
     expect(el.scrollTop).toBeGreaterThan(0)
   })
@@ -259,7 +261,7 @@ describe('the open conversation in the list', () => {
     const el = attach(tree)
     el.scrollTop = 0
     const line = nodes(tree).find(node => node.props?.['data-row-key'] === 'c04')
-    line.props.children.props.onClick()
+    drawnRow(line.props.children).props.onClick()
     expect(env.chat.selectConversation).toHaveBeenCalledWith('c04')
     list.render()
     expect(el.scrollTop).toBe(0)
@@ -361,8 +363,8 @@ describe('the open conversation in the list', () => {
 
     openElsewhere('c35')
     const folded = list.render()
-    // The strip shows the open list's rows: c00–c03 and the open c35, dot 4, ending at 64 + 4 * 26 = 168.
-    expect(stripColumn.scrollTop).toBe(168 - 100)
+    // The strip shows the open list's rows: c00–c08 and the open c35, dot 9, ending at 64 + 9 * 26 = 298.
+    expect(stripColumn.scrollTop).toBe(298 - 100)
     expect(nodes(folded).some(node => /(^|\s)w-14(\s|$)/.test(node.props?.className ?? ''))).toBe(true)
     expect(nodes(folded).find(node => node.key === 'c35').props['aria-current']).toBe(true)
   })
@@ -375,8 +377,8 @@ describe('"More"', () => {
     list.render()
     more().props.onClick()
     list.render()
-    expect(drawnKeys(env.tree).filter(key => key.startsWith('c'))).toHaveLength(25)
-    expect(useConversationListPrefs.getState().shown).toEqual({ s1: { conversations: 25 } })
+    expect(drawnKeys(env.tree).filter(key => key.startsWith('c'))).toHaveLength(30)
+    expect(useConversationListPrefs.getState().shown).toEqual({ s1: { conversations: 30 } })
     more().props.onClick()
     list.render()
     expect(drawnKeys(env.tree).filter(key => key.startsWith('c'))).toHaveLength(40)
@@ -384,7 +386,7 @@ describe('"More"', () => {
     expect(more().props.children).toBe('Show less')
     more().props.onClick()
     list.render()
-    expect(drawnKeys(env.tree).filter(key => key.startsWith('c'))).toHaveLength(5)
+    expect(drawnKeys(env.tree).filter(key => key.startsWith('c'))).toHaveLength(10)
   })
 })
 
@@ -394,22 +396,22 @@ describe('what needs the person', () => {
     const list = new Mount()
     list.render()
     const conversationKeys = () => drawnKeys(env.tree).filter(key => key.startsWith('c'))
-    expect(conversationKeys()).toEqual(['c20', 'c30', 'c00', 'c01', 'c02'])
+    expect(conversationKeys()).toEqual(['c20', 'c30', 'c00', 'c01', 'c02', 'c03', 'c04', 'c05', 'c06', 'c07'])
 
     // Opened from the list: the finish is seen, but the row stays where it was clicked.
     const line = nodes(env.tree).find(node => node.props?.['data-row-key'] === 'c30')
-    line.props.children.props.onClick()
+    drawnRow(line.props.children).props.onClick()
     env.statuses = new Map([['c20', 'waiting']])
     list.render()
     list.render()
-    expect(conversationKeys()).toEqual(['c20', 'c30', 'c00', 'c01', 'c02'])
+    expect(conversationKeys()).toEqual(['c20', 'c30', 'c00', 'c01', 'c02', 'c03', 'c04', 'c05', 'c06', 'c07'])
 
     // Something else opened: it goes back to its place by time.
     const other = nodes(env.tree).find(node => node.props?.['data-row-key'] === 'c01')
-    other.props.children.props.onClick()
+    drawnRow(other.props.children).props.onClick()
     list.render()
     list.render()
-    expect(conversationKeys()).toEqual(['c20', 'c00', 'c01', 'c02', 'c03'])
+    expect(conversationKeys()).toEqual(['c20', 'c00', 'c01', 'c02', 'c03', 'c04', 'c05', 'c06', 'c07', 'c08'])
   })
 
   it('puts a team with a question first in its section and opens it', () => {

@@ -44,7 +44,7 @@ describe('team task hover card', () => {
     expect(teamTaskHoverCard(task, t)).toMatchObject({ label: 'Plan', owner: 'Crew', note: undefined })
     expect(teamTaskHoverCard({ ...task, startedBy: 'Ann' }, t).note).toBe('Started by Ann')
   })
-  it('falls back to the new-conversation label', () => {
-    expect(teamTaskHoverCard({ ...task, label: '' }, t).label).toBe('New team conversation')
+  it('falls back to the new-task label', () => {
+    expect(teamTaskHoverCard({ ...task, label: '' }, t).label).toBe('New task')
   })
 })

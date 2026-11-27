@@ -132,7 +132,7 @@ function press(list: Mount, props: Props) {
   const tree = list.render(props)
   // The element the list measures the pointer against.
   const container = nodes(tree).find(node => node.ref && typeof node.ref === 'object' && 'current' in node.ref)
-  container.ref.current = { getBoundingClientRect: () => ({ left: LIST_LEFT }) }
+  container.ref.current = { getBoundingClientRect: () => ({ left: LIST_LEFT }), style: {} }
   nodes(tree).find(node => node.props?.title === 'Drag to resize width').props.onMouseDown({ preventDefault() {} })
   return list.render(props)
 }
@@ -195,6 +195,21 @@ describe('the conversation list form', () => {
 
     expect(drawn(release(list, besideCanvas, 40))).toBe('strip')
     expect(useConversationListPrefs.getState().listFolded).toEqual({ 'with-canvas': true })
+  })
+
+  it('follows the pointer on the element itself while held, rendering only on crossing the fold and at release', () => {
+    const list = new Mount()
+    const tree = list.render(withoutCanvas)
+    const container = nodes(tree).find(node => node.ref && typeof node.ref === 'object' && 'current' in node.ref)
+    press(list, withoutCanvas)
+    const element = container.ref.current
+    move(list, withoutCanvas, 200)
+    const held = move(list, withoutCanvas, 240)
+    expect(element.style.width).toBe('240px')
+    // React's width is still the one it last rendered: it heard of no pointer move since.
+    expect(drawn(held)).toBe(200)
+    expect(drawn(release(list, withoutCanvas, 240))).toBe(240)
+    expect(env.setConfig).toHaveBeenCalledWith({ layout: { sidebarWidth: 240 } })
   })
 
   it('keeps the choice beside the canvas apart from the one without it', () => {

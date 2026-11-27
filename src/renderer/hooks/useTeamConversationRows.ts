@@ -6,18 +6,18 @@ import { useTeamChatHiddenStore, type HiddenTeamChat } from '../stores/team-chat
 import type { TaskStatus } from '../types'
 
 export type NativeTeamTask = TeamNativeTaskPage['items'][number]
-type TeamSummary = Pick<Team, 'id' | 'name'> & Partial<Pick<TeamListItem, 'roster'>>
+type TeamSummary = Pick<Team, 'id' | 'name'> & Partial<Pick<TeamListItem, 'roster' | 'memberCount'>>
 
 /**
- * Faces shown for a team. `overflow` counts the members not shown as a plain
- * face: with a full set of four faces the last one is veiled and counted in it.
+ * What a team's mark is drawn from: its id, which decides every face for good,
+ * and how many members it has, which decides how many faces (see TeamAvatar).
  */
-export interface TeamAvatarFaces { names: string[]; overflow: number }
+export interface TeamMarkSpec { teamId: string; members: number }
 export type TeamListRow =
   /** `attention`: the most urgent state among its listed (unpinned, kept) tasks, shown while folded. */
-  | { type: 'team-header'; key: string; teamId: string; name: string; collapsed: boolean; avatar: TeamAvatarFaces; attention?: Exclude<TaskStatus, 'idle'> }
+  | { type: 'team-header'; key: string; teamId: string; name: string; collapsed: boolean; avatar: TeamMarkSpec; attention?: Exclude<TaskStatus, 'idle'> }
   /** `status`: the task's state for this person (seen or not); derived from the task alone when absent. */
-  | { type: 'team-item'; key: string; task: NativeTeamTask; standalone: boolean; starred: boolean; avatar: TeamAvatarFaces; status?: TaskStatus }
+  | { type: 'team-item'; key: string; task: NativeTeamTask; standalone: boolean; starred: boolean; avatar: TeamMarkSpec; status?: TaskStatus }
   | { type: 'team-retry'; key: string }
   /** Tasks of this team the person archived, with the way back. */
   | { type: 'team-hidden'; key: string; teamId: string; count: number }
@@ -26,18 +26,11 @@ export type TeamListRow =
 
 const EMPTY_PINS: string[] = []
 const EMPTY_HIDDEN: Record<string, HiddenTeamChat> = {}
-const EMPTY_FACES: TeamAvatarFaces = { names: [], overflow: 0 }
 const PAGE_SIZE = 50
-const AVATAR_SLOTS = 4
 
-/**
- * Up to four slots, lead first: every member when the team fits, otherwise four
- * faces with the last one veiled by `+n` (n = total - 3, the veiled member included).
- */
-export function teamAvatarFaces(roster: readonly TeamRosterFace[]): TeamAvatarFaces {
-  const faces = [...roster].sort((a, b) => Number(b.isLead) - Number(a.isLead))
-  const names = faces.slice(0, AVATAR_SLOTS).map(member => member.memberName)
-  return { names, overflow: faces.length > AVATAR_SLOTS ? faces.length - (AVATAR_SLOTS - 1) : 0 }
+/** A team's mark from its summary: the member count it reports, else its roster's length. */
+export function teamMarkSpec(team: { id: string; memberCount?: number; roster?: readonly TeamRosterFace[] }): TeamMarkSpec {
+  return { teamId: team.id, members: team.memberCount ?? team.roster?.length ?? 0 }
 }
 
 export type TeamGroupAttention = 'waiting' | 'generating'
@@ -68,7 +61,7 @@ export interface TeamGroup {
   /** `team:<id>`, the group's key in the list and in its fold and "More" choices. */
   key: string
   name: string
-  avatar: TeamAvatarFaces
+  avatar: TeamMarkSpec
   /** Kept (not archived), not pinned. */
   tasks: NativeTeamTask[]
   pinned: NativeTeamTask[]
@@ -77,11 +70,11 @@ export interface TeamGroup {
 
 /** Teams in their own order, then any a listed task names that the summaries do not have yet. */
 export function buildTeamGroups(tasks: NativeTeamTask[], teams: TeamSummary[], pins: readonly string[], hidden: Record<string, HiddenTeamChat> = EMPTY_HIDDEN): TeamGroup[] {
-  const groups = new Map<string, TeamGroup>(teams.map(team => [team.id, { teamId: team.id, key: `team:${team.id}`, name: team.name, avatar: teamAvatarFaces(team.roster ?? []), tasks: [], pinned: [], hidden: 0 }]))
+  const groups = new Map<string, TeamGroup>(teams.map(team => [team.id, { teamId: team.id, key: `team:${team.id}`, name: team.name, avatar: teamMarkSpec(team), tasks: [], pinned: [], hidden: 0 }]))
   for (const task of tasks) {
     let group = groups.get(task.teamId)
     if (!group) {
-      group = { teamId: task.teamId, key: `team:${task.teamId}`, name: task.teamName, avatar: EMPTY_FACES, tasks: [], pinned: [], hidden: 0 }
+      group = { teamId: task.teamId, key: `team:${task.teamId}`, name: task.teamName, avatar: { teamId: task.teamId, members: 0 }, tasks: [], pinned: [], hidden: 0 }
       groups.set(task.teamId, group)
     }
     const key = teamTaskKey(task.teamId, task.epochId)

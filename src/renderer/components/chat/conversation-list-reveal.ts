@@ -114,7 +114,8 @@ export function useConversationReveal({ spaceId, conversationId, panes, strip, o
     }
     if (step.type === 'dot') {
       const column = stripRef.current
-      const dot = column?.children[step.index]
+      // By key where the strip can be searched: it mounts only the dots near its viewport, so position is not index.
+      const dot = column && (typeof column.querySelectorAll === 'function' ? findRow(column, id) : undefined) || column?.children[step.index]
       if (!column || !dot) return
       scrollChildIntoView(column, dot)
     } else {

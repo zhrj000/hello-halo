@@ -16,7 +16,7 @@ vi.mock('../../../src/renderer/stores/team-chat-pins.store', () => ({
 vi.mock('../../../src/renderer/stores/team-chat-hidden.store', () => ({
   useTeamChatHiddenStore: Object.assign((select: any) => select({ hidden: env.hidden, reconcile: env.reconcile }), { getState: () => ({ hidden: env.hidden }) }),
 }))
-import { buildTeamRows, teamAvatarFaces, teamGroupAttention, teamsWaitingOnMe, useTeamConversationRows, type NativeTeamTask } from '../../../src/renderer/hooks/useTeamConversationRows'
+import { buildTeamRows, teamMarkSpec, teamGroupAttention, teamsWaitingOnMe, useTeamConversationRows, type NativeTeamTask } from '../../../src/renderer/hooks/useTeamConversationRows'
 
 class HookRunner<T> {
   slots: any[] = []; index = 0; dirty = true; effects: (() => void)[] = []; result!: T
@@ -272,30 +272,17 @@ describe('team conversation metadata', () => {
 })
 
 describe('buildTeamRows', () => {
-  it('shows every member up to four, then four faces with the last veiled by a count, lead first and shared across grouped and pinned rows', () => {
-    const roster = [
-      { appId: 'writer', memberName: 'Writer', isLead: false },
-      { appId: 'lead', memberName: 'Lead', isLead: true },
-      { appId: 'analyst', memberName: 'Analyst', isLead: false },
-      { appId: 'researcher', memberName: 'Researcher', isLead: false },
-      { appId: 'reviewer', memberName: 'Reviewer', isLead: false },
-    ]
-    const teams = [{ id: 't', name: 'Crew', roster }]
-    const result = buildTeamRows([task('pin'), task('chat')], teams, ['team:t:pin'], () => true)
-    for (const row of [...result.rows, ...result.pinned]) {
-      if (row.type === 'team-item') expect(row.avatar).toEqual({ names: ['Lead', 'Writer', 'Analyst', 'Researcher'], overflow: 2 })
-    }
-    expect(roster.map(member => member.appId)).toEqual(['writer', 'lead', 'analyst', 'researcher', 'reviewer'])
+  it('marks a team by its id and member count, shared across grouped and pinned rows', () => {
+    const roster = Array.from({ length: 5 }, (_, index) => ({ appId: `m${index}`, memberName: `M${index}`, isLead: index === 0 }))
+    const result = buildTeamRows([task('pin'), task('chat')], [{ id: 't', name: 'Crew', roster }], ['team:t:pin'], () => true)
+    const items = [...result.rows, ...result.pinned].filter(row => row.type === 'team-item')
+    expect(items).toHaveLength(2)
+    for (const row of items) if (row.type === 'team-item') expect(row.avatar).toEqual({ teamId: 't', members: 5 })
   })
-  it.each([
-    [1, { names: ['Lead'], overflow: 0 }],
-    [2, { names: ['Lead', 'M1'], overflow: 0 }],
-    [4, { names: ['Lead', 'M1', 'M2', 'M3'], overflow: 0 }],
-    [5, { names: ['Lead', 'M1', 'M2', 'M3'], overflow: 2 }],
-    [120, { names: ['Lead', 'M1', 'M2', 'M3'], overflow: 117 }],
-  ])('sizes the overflow for a team of %i members', (total, expected) => {
-    const roster = Array.from({ length: total }, (_, index) => ({ appId: `m${index}`, memberName: index === 0 ? 'Lead' : `M${index}`, isLead: index === 0 }))
-    expect(teamAvatarFaces(roster)).toEqual(expected)
+  it('counts members from the summary, then the roster, else none', () => {
+    expect(teamMarkSpec({ id: 't', memberCount: 7, roster: [] })).toEqual({ teamId: 't', members: 7 })
+    expect(teamMarkSpec({ id: 't', roster: [{ appId: 'a', memberName: 'A', isLead: true }] })).toEqual({ teamId: 't', members: 1 })
+    expect(teamMarkSpec({ id: 't' })).toEqual({ teamId: 't', members: 0 })
   })
   it('keeps stable group and task keys, empty teams, and pinned tasks outside collapsed groups', () => {
     const tasks = [task('b1', 'b'), task('a1', 'a'), task('a2', 'a'), task('orphan', 'c')]
@@ -305,7 +292,7 @@ describe('buildTeamRows', () => {
     expect(grouped.rows.map(row => row.key)).toEqual(['team:a', 'team:a:a2', 'team:b', 'team:empty', 'team:c', 'team:c:orphan'])
     expect(grouped.pinned.map(row => row.key)).toEqual(['team:a:a1', 'team:b:b1'])
     expect(grouped.pinned.every(row => row.type === 'team-item' && row.starred && row.standalone)).toBe(true)
-    expect(grouped.rows.filter(row => row.type === 'team-header').map(({ avatar, ...row }) => { expect(avatar).toEqual({ names: [], overflow: 0 }); return row })).toEqual([
+    expect(grouped.rows.filter(row => row.type === 'team-header').map(({ avatar, ...row }) => { expect(avatar).toEqual({ teamId: row.teamId, members: 0 }); return row })).toEqual([
       { type: 'team-header', key: 'team:a', teamId: 'a', name: 'Alpha', collapsed: false },
       { type: 'team-header', key: 'team:b', teamId: 'b', name: 'Beta', collapsed: true },
       { type: 'team-header', key: 'team:empty', teamId: 'empty', name: 'Empty', collapsed: false },

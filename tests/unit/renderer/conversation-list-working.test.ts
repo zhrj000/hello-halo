@@ -28,6 +28,7 @@ vi.mock('../../../src/renderer/stores/chat.store', () => ({
 vi.mock('../../../src/renderer/stores/apps.store', () => ({ useAppsStore: (select: any) => select(env.apps) }))
 vi.mock('../../../src/renderer/stores/space.store', () => ({ useSpaceStore: { getState: () => ({ currentSpace: { id: 's1' } }) } }))
 vi.mock('../../../src/renderer/stores/app.store', () => ({ useAppStore: Object.assign((select: any) => select({ config: null }), { getState: () => ({ config: null }) }) }))
+vi.mock('../../../src/renderer/stores/app-reminders.store', () => ({ useConversationReminders: () => [], useAppRemindersStore: { getState: () => ({ byApp: {} }) } }))
 vi.mock('../../../src/renderer/stores/app-chat-pins.store', () => ({ useAppChatPinsStore: (select: any) => select({ toggleAppChatPin: vi.fn() }) }))
 vi.mock('../../../src/renderer/stores/conversation-list-prefs.store', async original => ({
   ...await original<typeof import('../../../src/renderer/stores/conversation-list-prefs.store')>(),
@@ -69,7 +70,9 @@ function listedChat(appId: string) {
 }
 
 /** The element drawn for the row with `key`. */
-const rowFor = (tree: any, key: string) => nodes(tree).find(node => node.props?.['data-row-key'] === key)?.props.children
+const rowFor = (tree: any, key: string) => drawnRow(nodes(tree).find(node => node.props?.['data-row-key'] === key)?.props.children)
+/** A list row as drawn: memoized rows are rendered once (they hold no state of their own). */
+function drawnRow(el: any) { return el?.type?.type ? el.type.type(el.props) : el }
 
 /** The status dot a digital human's group heading shows, if any. */
 function headingDot(appId: string) {
@@ -98,8 +101,8 @@ describe('a digital human at work', () => {
     const personal = rowFor(render(), 'dh-header:lin')
     const onToggle = vi.fn()
     const onSelected = vi.fn()
-    const team = new ComponentRunner().render(() => TeamConversationRow({
-      row: { type: 'team-header', key: 'team:t', teamId: 't', name: 'Crew', collapsed: false, avatar: { names: ['Lead', 'Writer'], overflow: 0 } },
+    const team = new ComponentRunner().render(() => (TeamConversationRow as any).type({
+      row: { type: 'team-header', key: 'team:t', teamId: 't', name: 'Crew', collapsed: false, avatar: { teamId: 't', members: 2 } },
       spaceId: 's1', onToggle, onSelected, onRefresh: vi.fn(),
     }))
     expect(personal.type).toBe(ConversationGroupHeader)

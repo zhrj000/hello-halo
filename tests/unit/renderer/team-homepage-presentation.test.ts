@@ -23,6 +23,7 @@ vi.mock('../../../src/renderer/components/team/TeamSessionChat', () => ({ TeamSe
 vi.mock('../../../src/renderer/components/references', () => ({ ConversationReferenceScope: ({ children }: any) => children }))
 import { TeamConversationRow } from '../../../src/renderer/components/chat/TeamConversationRow'
 import { TaskRoom } from '../../../src/renderer/components/team/workbench/TaskRoom'
+import { teamMarkImageUrl } from '../../../src/renderer/components/apps/avatar-image'
 
 const detail: any = { team: { id: 'team' }, roster: [{ appId: 'member', memberName: 'Member' }], pendingEscalations: [], tasks: [], findings: [], activities: [] }
 const task: any = { teamId: 'team', epochId: 'epoch', label: 'Discussion', kind: 'native' }
@@ -31,43 +32,28 @@ const room = (homepageConversation: boolean, selectedTask: any = null) => render
   onSelectMember: () => {}, onCreated: () => {}, onActivity: () => {}, onTask: () => {}, onExecution: () => {},
 }))
 const row = (value: any, compact = false) => renderToStaticMarkup(createElement(TeamConversationRow, {
-  row: { avatar: { names: [], overflow: 0 }, ...value }, compact, spaceId: 'space', onToggle: () => {}, onRefresh: () => {},
+  row: { avatar: { teamId: 'team', members: 0 }, ...value }, compact, spaceId: 'space', onToggle: () => {}, onRefresh: () => {},
 }))
 
 describe('homepage team conversation presentation', () => {
-  it('draws a team as a square grid of up to four member faces, lead first, the same in headers and pins, and only a status mark in the folded list', () => {
-    const avatarNames = ['Lead', 'Writer', 'Analyst', 'Researcher']
-    const avatar = { names: avatarNames, overflow: 2 }
+  it('draws a team as its mark, the same in headers and pins, and only a status mark in the folded list', () => {
+    const avatar = { teamId: 'team', members: 4 }
     const header = row({ type: 'team-header', teamId: 'team', name: 'Crew', collapsed: false, avatar })
     const pin = row({ type: 'team-item', task: { ...task, teamName: 'Crew' }, standalone: true, avatar })
-    expect(row({ type: 'team-item', task: { ...task, teamName: 'Crew' }, avatar }, true)).not.toContain('data-avatar=')
+    expect(row({ type: 'team-item', task: { ...task, teamName: 'Crew' }, avatar }, true)).not.toContain('<img')
     for (const [html, size] of [[header, 20], [pin, 18]] as const) {
-      expect(html.match(/data-avatar=/g)).toHaveLength(4)
-      for (const name of avatarNames) expect(html).toContain(`data-avatar="${name}"`)
-      expect(html.indexOf('data-avatar="Lead"')).toBeLessThan(html.indexOf('data-avatar="Writer"'))
-      expect(html).toContain(`width:${size}px;height:${size}px`)
-      expect(html).toContain('grid-template-columns:repeat(2,')
-      // How many more there are is told elsewhere: no count drawn over a face, no overlap.
-      expect(html).not.toContain('+2')
-      expect(html).not.toContain('box-shadow')
+      // One static image, drawn from the team id and its member count.
+      expect(html.match(/<img /g)).toHaveLength(1)
+      expect(html).toContain('data-team-mark="team"')
+      expect(html).toContain(`src="${teamMarkImageUrl('team', 4)}"`)
+      expect(html).toContain(`width="${size}"`)
     }
   })
-  it('lays out one face centred, two side by side and three as one over two', () => {
-    const header = (names: string[]) => row({ type: 'team-header', teamId: 'team', name: 'Crew', collapsed: false, avatar: { names, overflow: 0 } })
-    const one = header(['Lead'])
-    expect(one.match(/data-avatar=/g)).toHaveLength(1)
-    expect(one).toContain('grid-template-columns:repeat(1,')
-    expect(header(['Lead', 'Writer'])).toContain('grid-template-columns:repeat(2,')
-    const three = header(['Lead', 'Writer', 'Analyst'])
-    expect(three.match(/data-avatar=/g)).toHaveLength(3)
-    expect(three).toContain('grid-column:1 / 3')
-  })
-  it('shows the team initial without faces and keeps the team page behind the avatar alone', () => {
-    const fallback = row({ type: 'team-header', teamId: 'team', name: 'Crew', collapsed: false })
-    expect(fallback).toContain('>C</span>')
-    expect(fallback).not.toContain('data-avatar=')
-    expect(fallback.match(/<button/g)).toHaveLength(4)
-    expect(fallback).toContain('aria-label="View {{name}}"')
+  it('keeps the team page behind the mark alone', () => {
+    const header = row({ type: 'team-header', teamId: 'team', name: 'Crew', collapsed: false, avatar: { teamId: 'team', members: 0 } })
+    expect(header).toContain(`src="${teamMarkImageUrl('team', 1)}"`)
+    expect(header.match(/<button/g)).toHaveLength(4)
+    expect(header).toContain('aria-label="View {{name}}"')
   })
   it('marks a folded team with its most urgent state, and an open one not at all', () => {
     const folded = row({ type: 'team-header', teamId: 'team', name: 'Crew', collapsed: true, attention: 'waiting' })
@@ -83,12 +69,13 @@ describe('homepage team conversation presentation', () => {
       expect(html).not.toMatch(/Needs your reply|>Completed<|>Errored</)
     }
   })
-  it('offers an open empty team its first conversation, and archived tasks back', () => {
-    expect(row({ type: 'team-empty', key: 'team-empty:team', teamId: 'team', name: 'Crew' })).toContain('Start the first conversation')
+  it('offers an open empty team its first task, and archived tasks back', () => {
+    expect(row({ type: 'team-empty', key: 'team-empty:team', teamId: 'team', name: 'Crew' })).toContain('Start the first task')
     expect(row({ type: 'team-hidden', key: 'team-hidden:team', teamId: 'team', count: 2 })).toContain('Show {{count}} archived')
   })
   it('uses a simple draft while preserving workbench onboarding', () => {
     expect(room(true)).toContain('No messages yet')
+    expect(room(true)).toContain('Tell the team what you need. Send it and the task begins.')
     expect(room(true)).not.toContain('Start a new task')
     expect(room(false)).toContain('Start a new task')
   })
@@ -103,7 +90,7 @@ describe('homepage team conversation presentation', () => {
     expect(workbench).toContain('data-picker="toolbar"')
   })
   it('labels the team plus and keeps task actions behind the row menu', () => {
-    expect(row({ type: 'team-header', teamId: 'team', name: 'Crew', collapsed: false })).toContain('aria-label="New team conversation"')
+    expect(row({ type: 'team-header', teamId: 'team', name: 'Crew', collapsed: false })).toContain('aria-label="Start task"')
     const html = row({ type: 'team-item', key: 'team:epoch', task, starred: false })
     expect(html).not.toContain('Complete task')
     expect(html).toContain('aria-label="More"')

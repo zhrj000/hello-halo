@@ -13,7 +13,7 @@
 import type { TaskStatus } from '../../types'
 
 /** Rows, groups and conversations shown before "More". */
-export const LIST_PEEK = 5
+export const LIST_PEEK = 10
 /** How many more one press of "More" shows, per kind of list. */
 export const MORE_STEP = { rows: 10, groups: 10, conversations: 20 } as const
 

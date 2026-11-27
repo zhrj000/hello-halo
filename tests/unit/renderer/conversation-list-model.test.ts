@@ -21,16 +21,18 @@ describe('the order of what needs the person', () => {
 })
 
 describe('the first few and "More"', () => {
-  const items = Array.from({ length: 12 }, (_, i) => i)
-  it('shows the first five and counts the rest', () => {
-    expect(peek(items, undefined, () => false)).toEqual({ visible: [0, 1, 2, 3, 4], rest: 7, expanded: false })
+  const items = Array.from({ length: 24 }, (_, i) => i)
+  const first = Array.from({ length: LIST_PEEK }, (_, i) => i)
+  it('shows the first ten and counts the rest', () => {
+    expect(LIST_PEEK).toBe(10)
+    expect(peek(items, undefined, () => false)).toEqual({ visible: first, rest: 14, expanded: false })
   })
   it('shows the open one past them in the last place, so the count holds', () => {
-    expect(peek(items, undefined, item => item === 9)).toEqual({ visible: [0, 1, 2, 3, 9], rest: 7, expanded: false })
+    expect(peek(items, undefined, item => item === 19)).toEqual({ visible: [...first.slice(0, -1), 19], rest: 14, expanded: false })
   })
   it('opens further by a step and says when everything shows after being opened', () => {
     expect(nextShown(undefined, 10)).toBe(LIST_PEEK + 10)
-    expect(peek(items, 15, () => false)).toEqual({ visible: items, rest: 0, expanded: true })
-    expect(peek([1, 2], 15, () => false)).toEqual({ visible: [1, 2], rest: 0, expanded: false })
+    expect(peek(items, 30, () => false)).toEqual({ visible: items, rest: 0, expanded: true })
+    expect(peek([1, 2], 30, () => false)).toEqual({ visible: [1, 2], rest: 0, expanded: false })
   })
 })

@@ -5,16 +5,16 @@
  */
 
 import type { AppChatConversationRow } from '../../hooks/useAppChatConversationRows'
-import type { NativeTeamTask, TeamAvatarFaces } from '../../hooks/useTeamConversationRows'
+import type { NativeTeamTask, TeamMarkSpec } from '../../hooks/useTeamConversationRows'
 import type { TaskStatus } from '../../types'
 
 /**
  * What the hover card shows for a row: who it belongs to and when, its title,
  * then who started it and its state. `owner` is the digital human or team the
- * row belongs to; `ownerFaces` marks a team (drawn as its square grid) and
- * carries its members' faces.
+ * row belongs to; `ownerMark` marks a team and carries what its mark is drawn
+ * from (team id and member count).
  */
-export interface RowHoverCard { label: string; owner?: string; ownerFaces?: TeamAvatarFaces; note?: string; time?: string; status?: TaskStatus }
+export interface RowHoverCard { label: string; owner?: string; ownerMark?: TeamMarkSpec; note?: string; checks?: string; time?: string; status?: TaskStatus }
 
 /** Words for a row's status dot, for places where the colour alone is not enough. */
 export function taskStatusLabel(status: TaskStatus, t: (s: string) => string): string | undefined {
@@ -52,12 +52,13 @@ export function formatRowTime(timestamp: string | number, t: (s: string) => stri
 
 
 /** Provenance (`note`) appears only for tasks someone else started. */
-export function teamTaskHoverCard(task: NativeTeamTask, t: (s: string, opts?: Record<string, unknown>) => string, faces?: TeamAvatarFaces, status?: TaskStatus): RowHoverCard {
+export function teamTaskHoverCard(task: NativeTeamTask, t: (s: string, opts?: Record<string, unknown>) => string, mark?: TeamMarkSpec, status?: TaskStatus): RowHoverCard {
   return {
-    label: task.label || t('New team conversation'),
+    label: task.label || t('New task'),
     owner: task.teamName,
-    ...(faces ? { ownerFaces: faces } : {}),
+    ...(mark ? { ownerMark: mark } : {}),
     note: task.startedBy ? t('Started by {{name}}', { name: task.startedBy }) : undefined,
+    ...(task.checkCount ? { checks: t('Periodic checks: {{n}}', { n: task.checkCount }) } : {}),
     time: formatRowTime(task.lastActivityAt, t),
     status: status && status !== 'idle' ? status : task.waitingForMe ? 'waiting' : task.active ? 'generating' : undefined,
   }
