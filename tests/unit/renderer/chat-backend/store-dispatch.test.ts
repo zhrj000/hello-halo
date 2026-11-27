@@ -1072,7 +1072,9 @@ describe('opening a space conversation that is not cached', () => {
 
     expect(apiMock.getConversation).toHaveBeenCalledTimes(1)
     expect(apiMock.getSessionState).toHaveBeenCalledTimes(1)
-    expect(apiMock.ensureSessionWarm).toHaveBeenCalledTimes(1)
+    // Warmed once the conversation has stayed open a moment, not on the click.
+    expect(apiMock.ensureSessionWarm).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(apiMock.ensureSessionWarm).toHaveBeenCalledTimes(1), { timeout: 3000 })
     expect(store.getState().conversationCache.has('c2')).toBe(true)
     expect(store.getState().isLoadingConversation).toBe(false)
   })

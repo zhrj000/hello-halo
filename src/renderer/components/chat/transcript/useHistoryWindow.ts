@@ -2,7 +2,8 @@
  * Bounds how much of a long transcript React has to build, without taking
  * scrolling away from the browser.
  *
- * Only the newest `initial` rows are mounted at first. When the reader scrolls
+ * Only the newest `initial` rows are mounted at first, then the rows above
+ * them in small steps up to `fillTo` (see HistoryWindowOptions). When the reader scrolls
  * to within `preloadMargin` of the oldest mounted row, the next `page` older
  * rows are mounted above it. There is nothing to measure or estimate for rows
  * that were never in the DOM — the failure mode of list virtualization. Rows
@@ -25,8 +26,16 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 export interface HistoryWindowOptions {
-  /** Rows mounted when the transcript first appears. */
+  /** Rows mounted when the transcript first appears (the first frame shows these). */
   initial?: number
+  /**
+   * Until this many rows are live, older rows are added `fillPage` at a time
+   * rather than `page` at a time, unprompted whenever the page is idle: the
+   * transcript appears after a few rows' work, and the rows above it arrive
+   * in small steps instead of in one long task.
+   */
+  fillTo?: number
+  fillPage?: number
   /** Rows mounted per step when scrolling. */
   page?: number
   /** Most rows live at once; the rest of the mounted range are placeholders. */
@@ -65,6 +74,16 @@ export interface HistoryWindow {
 const REVEAL_CONTEXT = 5
 
 export const MAX_LIVE_ROWS = 300
+/**
+ * Opening a conversation builds its rows in one task; each reply costs a full
+ * markdown parse (~5–10ms each on a fast machine, several times that on
+ * Windows), so 40 rows held the switch for a second. The newest few show
+ * first, and the rest of what used to be mounted follows a few at a time
+ * while the page is idle.
+ */
+export const FIRST_PAINT_ROWS = 8
+export const FILL_TO_ROWS = 40
+export const FILL_PAGE_ROWS = 4
 
 /** Mounted range: `start` oldest mounted row; live rows `[liveStart, liveEnd)`, `liveEnd` null = through the end. */
 export interface LiveRange {
@@ -248,7 +267,7 @@ function rowAt(scroller: HTMLElement, index: number): HTMLElement | null {
 export function useHistoryWindow(
   keys: readonly string[],
   scroller: HTMLElement | null,
-  { initial = 40, page = 30, maxLive = MAX_LIVE_ROWS, preloadMargin = 1500, onReachStart }: HistoryWindowOptions = {}
+  { initial = FIRST_PAINT_ROWS, fillTo = FILL_TO_ROWS, fillPage = FILL_PAGE_ROWS, page = 30, maxLive = MAX_LIVE_ROWS, preloadMargin = 1500, onReachStart }: HistoryWindowOptions = {}
 ): HistoryWindow {
   const count = keys.length
   const firstKey: string | null = keys.length > 0 ? keys[0] : null
@@ -316,8 +335,9 @@ export function useHistoryWindow(
     }
     const first = rowAt(scroller, prev.liveStart)
     pendingAnchor.current = { el: first, top: first?.getBoundingClientRect().top ?? 0 }
-    moveTo(pageUp(prev, prev.count, page, maxLive))
-  }, [scroller, page, maxLive, moveTo])
+    const live = endOf(prev, prev.count) - prev.liveStart
+    moveTo(pageUp(prev, prev.count, live < fillTo ? fillPage : page, maxLive))
+  }, [scroller, page, fillTo, fillPage, maxLive, moveTo])
 
   const loadNewer = useCallback(() => {
     const prev = currentRef.current
@@ -423,6 +443,18 @@ export function useHistoryWindow(
   }, [start, liveStart, liveEnd, count, scroller, sentinel, endSentinel, inRange, loadOlder, loadNewer])
 
   useEffect(() => () => cancelAnimationFrame(recheckFrame.current), [])
+
+  // After the first rows have shown, the rest of the opening window (`fillTo`)
+  // follows `fillPage` rows at a time whenever the page is idle, so the reader
+  // who scrolls up finds them there; input and painting go first.
+  const liveCount = (liveEnd ?? count) - liveStart
+  useEffect(() => {
+    if (!scroller || liveStart <= 0 || liveCount >= fillTo) return
+    const whenIdle = typeof window.requestIdleCallback === 'function'
+      ? (run: () => void) => { const id = window.requestIdleCallback(run, { timeout: 500 }); return () => window.cancelIdleCallback(id) }
+      : (run: () => void) => { const id = setTimeout(run, 50); return () => clearTimeout(id) }
+    return whenIdle(loadOlder)
+  }, [scroller, liveStart, liveCount, fillTo, loadOlder])
 
   useEffect(() => {
     if (!scroller || !sentinel) return

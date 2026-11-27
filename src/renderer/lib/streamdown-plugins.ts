@@ -17,7 +17,7 @@ import type { CodeHighlighterPlugin, MathPlugin } from 'streamdown'
  * The cache is shared across all hook callers so the plugin is constructed at
  * most once per session, regardless of how many renderers mount.
  */
-function createLazyPluginHook<T>(loader: () => Promise<T>): () => T | undefined {
+function createLazyPluginHook<T>(loader: () => Promise<T>): (() => T | undefined) & { preload: () => Promise<T> } {
   let cached: T | null = null
   let loadPromise: Promise<T> | null = null
 
@@ -26,12 +26,16 @@ function createLazyPluginHook<T>(loader: () => Promise<T>): () => T | undefined 
       loadPromise = loader().then(plugin => {
         cached = plugin
         return plugin
+      }, error => {
+        // A failed (early) load is tried again by the next renderer that asks.
+        loadPromise = null
+        throw error
       })
     }
     return loadPromise
   }
 
-  return function useLazyPlugin(): T | undefined {
+  function useLazyPlugin(): T | undefined {
     const [plugin, setPlugin] = useState<T | undefined>(cached ?? undefined)
 
     useEffect(() => {
@@ -44,6 +48,7 @@ function createLazyPluginHook<T>(loader: () => Promise<T>): () => T | undefined 
 
     return plugin
   }
+  return Object.assign(useLazyPlugin, { preload: load })
 }
 
 /**
@@ -80,3 +85,18 @@ export const useMathPlugin = createLazyPluginHook<MathPlugin>(async () => {
     rehypePlugin: rehypeKatex,
   }
 })
+
+/**
+ * Loads both plugins ahead of the first transcript. A renderer that mounts
+ * before they arrive renders every reply plain and then again once they land,
+ * which is what made the first conversation opened after launch slow; started
+ * when the app is idle after its first screen, they are ready by then.
+ */
+export function preloadMarkdownPlugins(): void {
+  const start = () => {
+    void useCodePlugin.preload().catch(error => console.warn('[Markdown] Code highlighter preload failed:', error))
+    void useMathPlugin.preload().catch(error => console.warn('[Markdown] Math preload failed:', error))
+  }
+  if (typeof window.requestIdleCallback === 'function') window.requestIdleCallback(start, { timeout: 3000 })
+  else setTimeout(start, 1500)
+}

@@ -58,6 +58,7 @@ import { useTeamStore } from './stores/team.store'
 import { canvasLifecycle } from './services/canvas-lifecycle'
 import { mountBrowserHost } from './browser-host'
 import { dismissBootSplash } from './lib/boot-splash'
+import { preloadMarkdownPlugins } from './lib/streamdown-plugins'
 import { trackNavigate } from './services/home-telemetry'
 import type { TeamUpdatedEvent, TeamBlackboardEvent, TeamMessageEvent, TeamPresenceEvent, TeamOfficeStatusEvent } from '../shared/apps/team-types'
 
@@ -83,7 +84,10 @@ const RAIL_VIEWS: AppView[] = ['space', 'settings', 'apps', 'tlon', 'store', 'sp
 // Sits next to the current page inside its Suspense boundary, so it mounts
 // once that page has rendered, never while only its loading fallback shows.
 function BootSplashRelease() {
-  useEffect(() => dismissBootSplash(), [])
+  useEffect(() => {
+    dismissBootSplash()
+    preloadMarkdownPlugins()
+  }, [])
   return null
 }
 

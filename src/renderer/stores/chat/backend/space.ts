@@ -80,14 +80,33 @@ async function open(ctx: BackendContext, { spaceId, conversationId }: { spaceId:
     await refresh(ctx, { spaceId, conversationId }, anchor)
   }
   if (options?.warm === false) return
+  scheduleWarm(spaceId, conversationId)
+}
 
-  // A ready V2 session means the first message does not pay the cold start.
-  try {
-    api.ensureSessionWarm(spaceId, conversationId)
-      .catch((error) => console.error('[ChatStore] Session warm up failed:', error))
-  } catch (error) {
-    console.error('[ChatStore] Failed to trigger session warm up:', error)
-  }
+/**
+ * How long a conversation stays open before its engine session is warmed.
+ * Warming spawns an engine process (costly on Windows, where it also competed
+ * with drawing the conversation just opened), so clicking through several
+ * conversations warms only the one the person stops at. Sending before then
+ * starts the session itself, as it does for any cold conversation.
+ */
+export const WARM_DWELL_MS = 1200
+let pendingWarm: { conversationId: string; timer: ReturnType<typeof setTimeout> } | null = null
+
+function scheduleWarm(spaceId: string, conversationId: string): void {
+  if (pendingWarm?.conversationId === conversationId) return
+  if (pendingWarm) clearTimeout(pendingWarm.timer)
+  const timer = setTimeout(() => {
+    if (pendingWarm?.timer === timer) pendingWarm = null
+    // A ready V2 session means the first message does not pay the cold start.
+    try {
+      api.ensureSessionWarm(spaceId, conversationId)
+        .catch((error) => console.error('[ChatStore] Session warm up failed:', error))
+    } catch (error) {
+      console.error('[ChatStore] Failed to trigger session warm up:', error)
+    }
+  }, WARM_DWELL_MS)
+  pendingWarm = { conversationId, timer }
 }
 
 /**
